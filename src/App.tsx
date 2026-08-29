@@ -424,12 +424,28 @@ export default function App() {
         progressTimerRef.current = null;
       }
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || "שגיאה בניתוח הכתוביות בשרת.");
+      let data: any = null;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json().catch(() => null);
       }
 
-      const data = await response.json();
+      if (!response.ok || !data) {
+        let errMsg = data?.error;
+        if (!errMsg) {
+          if (response.status === 413) {
+            errMsg = "גודל הפריימים גדול מדי. אנא נסה לדגום פחות פריימים.";
+          } else if (response.status === 503 || response.status === 504) {
+            errMsg = "שרת ה-AI חווה עומס רגעי. לחץ 'נסה שוב'.";
+          } else if (response.status === 404) {
+            errMsg = "שירות ה-AI אינו זמין כרגע בשרת.";
+          } else {
+            errMsg = `שגיאה בתקשורת עם שרת ה-AI (${response.status || "תגובה לא תקינה"}).`;
+          }
+        }
+        throw new Error(errMsg);
+      }
+
       const detectedCues: SubtitleCue[] = data.cues || [];
 
       setAnalysisProgress({
@@ -508,12 +524,16 @@ export default function App() {
       }),
     });
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || "שגיאה בתרגום הכתובית.");
+    let data: any = null;
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      data = await response.json().catch(() => null);
     }
 
-    const data = await response.json();
+    if (!response.ok || !data) {
+      throw new Error(data?.error || `שגיאה בתרגום הכתובית (${response.status}).`);
+    }
+
     if (data.hebrewText) {
       handleUpdateCue({
         ...cue,

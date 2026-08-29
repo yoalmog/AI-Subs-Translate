@@ -232,8 +232,12 @@ export async function prepareServerDownload(blob: Blob, filename: string): Promi
       }),
     });
     if (!res.ok) throw new Error("Failed to prepare download");
-    const data = await res.json();
-    return data.downloadUrl;
+    let data: any = null;
+    const contentType = res.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      data = await res.json().catch(() => null);
+    }
+    return data?.downloadUrl || null;
   } catch (e) {
     console.warn("Server prepare download error:", e);
     return null;

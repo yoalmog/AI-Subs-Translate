@@ -290,12 +290,16 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         }),
       });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || "שגיאה בביצוע תרגום גורף.");
+      let data: any = null;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json().catch(() => null);
       }
 
-      const data = await response.json();
+      if (!response.ok || !data) {
+        throw new Error(data?.error || `שגיאה בביצוע תרגום גורף (${response.status}).`);
+      }
+
       const translations: Record<string, string> = data.translations || {};
 
       let updatedCount = 0;

@@ -13,6 +13,17 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// Express JSON parsing error handler to return clean JSON error instead of HTML
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err && (err.type === "entity.too.large" || err.status === 413)) {
+    return res.status(413).json({ error: "גודל הבקשה חורג מהמגבלה המותרת. אנא נסה לדגום פחות פריימים." });
+  }
+  if (err instanceof SyntaxError && "body" in err) {
+    return res.status(400).json({ error: "פורמט בקשת ה-JSON שגוי." });
+  }
+  next(err);
+});
+
 // Lazy/Safe Gemini SDK initialization
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -557,6 +568,19 @@ app.get("/api/download-file/:token", (req, res) => {
   res.send(item.buffer);
 });
 
+// Explicit 404 handler for any unmatched /api/* routes so they never fall through to Vite SPA index.html
+app.all("/api/*", (req, res) => {
+  res.status(404).json({ error: `API route ${req.method} ${req.path} not found` });
+});
+
+// API Error Handler
+app.use("/api", (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("API Error:", err);
+  res.status(err.status || 500).json({
+    error: err.message || "שגיאה פנימית בשרת ה-API.",
+  });
+});
+
 // Vite middleware & Static Serving
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -573,9 +597,12 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Subtitle Translation Server running on http://0.0.0.0:${PORT}`);
   });
+
+  // Set 2 minute timeout for long-running multimodal Gemini analysis
+  server.setTimeout(120000);
 }
 
 startServer();
