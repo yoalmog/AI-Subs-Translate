@@ -1,0 +1,123 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+          - both
+
+jobs:
+  build-apk:
+    name: Build Android APK (${{ github.event.inputs.build_type || 'debug' }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        run: |
+          npm install
+
+      - name: Build Web Application
+        run: |
+          npx vite build
+
+      - name: Initialize & Sync Capacitor Android
+        run: |
+          if [ ! -d "android" ]; then
+            echo "Adding Capacitor Android platform..."
+            npx cap add android
+          fi
+          echo "Syncing Capacitor assets to Android project..."
+          npx cap sync android
+
+      - name: Set executable permissions for Gradle
+        run: |
+          chmod +x android/gradlew
+
+      - name: Build Debug APK
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' }}
+        run: |
+          cd android
+          ./gradlew assembleDebug --stacktrace
+          cd ..
+
+      - name: Build Release APK (Unsigned)
+        if: ${{ github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' || startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          cd android
+          ./gradlew assembleRelease --stacktrace
+          cd ..
+
+      - name: Locate Generated APKs
+        run: |
+          mkdir -p output_apks
+          if [ -f "android/app/build/outputs/apk/debug/app-debug.apk" ]; then
+            cp android/app/build/outputs/apk/debug/app-debug.apk output_apks/subtitle-editor-debug.apk
+            echo "Debug APK located."
+          fi
+          if [ -f "android/app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+            cp android/app/build/outputs/apk/release/app-release-unsigned.apk output_apks/subtitle-editor-release-unsigned.apk
+            echo "Release APK located."
+          fi
+          ls -la output_apks/
+
+      - name: Upload Debug APK Artifact
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-editor-debug-apk
+          path: output_apks/subtitle-editor-debug.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload Release APK Artifact
+        if: ${{ github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both' || startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-editor-release-apk
+          path: output_apks/subtitle-editor-release-unsigned.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Create GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output_apks/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

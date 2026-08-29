@@ -1,0 +1,6 @@
+{
+  "name": "תרגום כתוביות מובנות בסרטון לעברית",
+  "description": "זיהוי כתוביות מובנות בסרטון (Hardcoded Subtitles), תרגום מדויק לעברית, הסתרת הכתוביות המקוריות והטמעת כתוביות חדשות בעברית עם ייצוא וידאו ו-SRT.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
