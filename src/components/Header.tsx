@@ -68,62 +68,64 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="bg-[#111111] backdrop-blur border-b border-[#222222] sticky top-0 z-30 px-4 lg:px-6 py-3.5 shadow-xl" id="app-header">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-        {/* Brand & Title */}
-        <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-start">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-600/30 ring-1 ring-blue-400/30">
-              <Film className="w-5 h-5 text-white" />
+    <header className="bg-[#111111]/95 backdrop-blur border-b border-[#222222] sticky top-0 z-40 px-3 sm:px-4 lg:px-6 py-2.5 sm:py-3 shadow-xl" id="app-header">
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5 md:gap-4">
+        {/* Brand & Title Row */}
+        <div className="flex items-center justify-between gap-2.5 min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-blue-600 flex items-center justify-center shadow-md shadow-blue-600/30 ring-1 ring-blue-400/30 shrink-0">
+              <Film className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold text-white tracking-tight font-rubik">
+                <h1 className="text-base sm:text-lg font-bold text-white tracking-tight font-rubik whitespace-nowrap">
                   SubTranslate <span className="text-blue-500 font-extrabold">AI</span>
                 </h1>
-                <div className="hidden sm:flex items-center gap-1.5 bg-[#1a1a1a] px-2.5 py-0.5 rounded-full border border-[#333333]">
+                <div className="hidden sm:flex items-center gap-1.5 bg-[#1a1a1a] px-2 py-0.5 rounded-full border border-[#333333]">
                   <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
                   <span className="text-[10px] font-medium text-gray-400">מעבד OCR + תרגום לעברית</span>
                 </div>
               </div>
-              <p className="text-xs text-gray-400">
+              <p className="text-[11px] sm:text-xs text-gray-400 truncate hidden xs:block">
                 זיהוי כתוביות מוטמעות (Hardcoded), הסתרת המקור ותרגום מדויק לעברית
               </p>
             </div>
           </div>
 
-          {/* Quick Stats on Mobile */}
-          <div className="md:hidden flex items-center gap-2">
+          {/* Quick Style Settings Toggle on Mobile */}
+          <div className="md:hidden flex items-center gap-1.5 shrink-0">
             <button
               onClick={onOpenStyles}
-              className={`p-2 rounded-lg border text-xs font-medium transition ${
+              className={`h-8 px-2.5 rounded-lg border text-xs font-semibold transition flex items-center gap-1 cursor-pointer ${
                 showStyles
-                  ? "bg-blue-600 text-white border-blue-500"
+                  ? "bg-blue-600 text-white border-blue-500 shadow-sm"
                   : "bg-[#1a1a1a] text-gray-300 border-[#333333] hover:bg-[#262626]"
               }`}
-              title="עיצוב כתוביות"
+              title="עיצוב וכיסוי כתוביות"
             >
-              <Sliders className="w-4 h-4" />
+              <Sliders className="w-3.5 h-3.5" />
+              <span className="text-[11px]">עיצוב</span>
             </button>
           </div>
         </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center flex-wrap gap-2.5 w-full md:w-auto justify-end">
+        {/* Action Controls Toolbar - Responsive single/two-row with clean button sizes */}
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-0.5 md:pb-0 scrollbar-none justify-start md:justify-end">
           {/* Demo Videos dropdown */}
-          <div className="relative">
+          <div className="relative shrink-0">
             <button
               id="demo-videos-btn"
               onClick={() => setShowDemos(!showDemos)}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-300 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] rounded-lg transition hover:text-white"
+              className="h-8 px-2.5 sm:px-3 flex items-center gap-1.5 text-xs font-medium text-gray-300 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] hover:border-gray-500 rounded-lg transition hover:text-white cursor-pointer whitespace-nowrap shadow-xs"
             >
-              <PlayCircle className="w-4 h-4 text-blue-400" />
-              <span>סרטוני הדגמה</span>
+              <PlayCircle className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+              <span className="hidden sm:inline">סרטוני הדגמה</span>
+              <span className="sm:hidden">הדגמות</span>
             </button>
 
             {showDemos && (
               <div 
-                className="absolute left-0 md:right-0 md:left-auto mt-2 w-72 bg-[#141414] border border-[#2e2e2e] rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2"
+                className="absolute right-0 md:right-0 mt-2 w-72 bg-[#141414] border border-[#2e2e2e] rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2"
                 onMouseLeave={() => setShowDemos(false)}
               >
                 <div className="text-xs font-semibold text-gray-400 px-2 py-1.5 border-b border-[#222222]">
@@ -137,7 +139,7 @@ export const Header: React.FC<HeaderProps> = ({
                         onSelectDemo(demo);
                         setShowDemos(false);
                       }}
-                      className="w-full text-right px-2.5 py-2 text-xs rounded-lg hover:bg-blue-600/20 hover:text-blue-200 text-gray-200 transition flex flex-col gap-0.5 border border-transparent hover:border-blue-500/30"
+                      className="w-full text-right px-2.5 py-2 text-xs rounded-lg hover:bg-blue-600/20 hover:text-blue-200 text-gray-200 transition flex flex-col gap-0.5 border border-transparent hover:border-blue-500/30 cursor-pointer"
                     >
                       <div className="font-medium text-gray-100 flex items-center justify-between">
                         <span>{demo.title}</span>
@@ -162,11 +164,12 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="import-project-btn"
             onClick={() => projectFileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-300 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] hover:border-blue-500/50 rounded-lg transition hover:text-white cursor-pointer"
-            title="טען קובץ פרויקט JSON שמור (כולל כתוביות, עיצוב ונתוני וידאו)"
+            className="h-8 px-2.5 sm:px-3 flex items-center gap-1.5 text-xs font-medium text-gray-300 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] hover:border-blue-500/50 rounded-lg transition hover:text-white cursor-pointer whitespace-nowrap shrink-0 shadow-xs"
+            title="טען קובץ פרויקט JSON שמור"
           >
-            <FolderOpen className="w-4 h-4 text-emerald-400" />
-            <span>ייבוא פרויקט</span>
+            <FolderOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span className="hidden sm:inline">ייבוא פרויקט</span>
+            <span className="sm:hidden">ייבוא</span>
           </button>
 
           {/* Upload Button */}
@@ -180,23 +183,24 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="upload-video-btn"
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-gray-200 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] hover:border-gray-600 rounded-lg transition shadow-sm hover:text-white"
+            className="h-8 px-2.5 sm:px-3.5 flex items-center gap-1.5 text-xs font-medium text-gray-200 bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] hover:border-gray-500 rounded-lg transition shadow-xs hover:text-white cursor-pointer whitespace-nowrap shrink-0"
           >
-            <Upload className="w-4 h-4 text-blue-400" />
-            <span>העלה סרטון</span>
+            <Upload className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+            <span className="hidden sm:inline">העלה סרטון</span>
+            <span className="sm:hidden">העלאה</span>
           </button>
 
-          {/* Subtitle Styles Toggle */}
+          {/* Subtitle Styles Toggle (Desktop) */}
           <button
             id="toggle-styles-btn"
             onClick={onOpenStyles}
-            className={`hidden md:flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition ${
+            className={`hidden md:flex h-8 items-center gap-1.5 px-3 text-xs font-medium rounded-lg border transition whitespace-nowrap shrink-0 cursor-pointer ${
               showStyles
                 ? "bg-blue-600/20 text-blue-400 border-blue-500/50 shadow-inner"
                 : "bg-[#1a1a1a] text-gray-300 border-[#333333] hover:bg-[#262626] hover:text-white"
             }`}
           >
-            <Sliders className="w-4 h-4 text-blue-400" />
+            <Sliders className="w-3.5 h-3.5 text-blue-400 shrink-0" />
             <span>הגדרות כיסוי ועיצוב</span>
           </button>
 
@@ -205,16 +209,17 @@ export const Header: React.FC<HeaderProps> = ({
             id="start-ai-analysis-btn"
             disabled={!hasVideo || isAnalyzing}
             onClick={onStartAnalysis}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg shadow-md transition ${
+            className={`h-8 flex items-center gap-1.5 px-3 sm:px-4 text-xs font-bold rounded-lg shadow-sm transition whitespace-nowrap shrink-0 ${
               !hasVideo
                 ? "bg-[#1a1a1a] text-gray-600 border border-[#262626] cursor-not-allowed"
                 : isAnalyzing
                 ? "bg-blue-700 text-white animate-pulse cursor-wait"
-                : "bg-blue-600 hover:bg-blue-700 text-white shadow-[0_0_12px_rgba(59,130,246,0.45)] ring-1 ring-white/10 active:scale-95 cursor-pointer"
+                : "bg-blue-600 hover:bg-blue-700 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)] active:scale-95 cursor-pointer"
             }`}
           >
-            <Sparkles className={`w-4 h-4 ${isAnalyzing ? "animate-spin" : "text-amber-300"}`} />
-            <span>{isAnalyzing ? "סורק ומתרגם..." : "תרגם כתוביות ב-AI"}</span>
+            <Sparkles className={`w-3.5 h-3.5 shrink-0 ${isAnalyzing ? "animate-spin" : "text-amber-300"}`} />
+            <span className="hidden sm:inline">{isAnalyzing ? "סורק ומתרגם..." : "תרגם כתוביות ב-AI"}</span>
+            <span className="sm:hidden">{isAnalyzing ? "סורק..." : "תרגם ב-AI"}</span>
           </button>
 
           {/* Export Button */}
@@ -222,14 +227,15 @@ export const Header: React.FC<HeaderProps> = ({
             id="open-export-btn"
             disabled={!hasVideo}
             onClick={onOpenExport}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg border transition ${
+            className={`h-8 flex items-center gap-1.5 px-3 sm:px-3.5 text-xs font-bold rounded-lg border transition whitespace-nowrap shrink-0 ${
               !hasVideo
                 ? "bg-[#141414] text-gray-600 border-[#222222] cursor-not-allowed"
-                : "bg-[#1a1a1a] hover:bg-[#262626] text-white border-[#333333] hover:border-blue-500 shadow-sm"
+                : "bg-[#1a1a1a] hover:bg-[#262626] text-white border-[#333333] hover:border-blue-500 shadow-xs cursor-pointer"
             }`}
           >
-            <Download className="w-4 h-4 text-blue-400" />
-            <span>ייצוא סרטון</span>
+            <Download className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+            <span className="hidden sm:inline">ייצוא סרטון</span>
+            <span className="sm:hidden">ייצוא</span>
           </button>
         </div>
       </div>

@@ -422,7 +422,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`relative w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-[#333333] flex items-center justify-center select-none group ${
+        className={`relative isolate w-full aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-[#333333] flex items-center justify-center select-none group ${
           isDragging ? "ring-2 ring-blue-500 bg-[#151515]" : ""
         }`}
       >
@@ -564,18 +564,19 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             )}
 
             {/* OVERLAY LAYER 2: Hebrew Subtitles Box with Smooth Fade-in/Fade-out Transition */}
-            <AnimatePresence mode="wait">
+            <AnimatePresence>
               {showHebrewSubtitles && activeCue && activeCue.hebrewText.trim() && !previewOriginal && (
                 <motion.div
                   key={activeCue.id}
-                  initial={{ opacity: 0, y: 5, scale: 0.98 }}
+                  initial={{ opacity: 0, y: 4, scale: 0.985 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -3, scale: 0.99 }}
-                  transition={{ duration: 0.16, ease: "easeOut" }}
+                  exit={{ opacity: 0, y: -2, scale: 0.99, transition: { duration: 0.12, ease: "easeIn" } }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
                   id="hebrew-subtitle-overlay"
                   style={{
                     bottom: `${styles.positionBottomPercent}%`,
                     textAlign: styles.align || "center",
+                    willChange: "transform, opacity",
                   }}
                   className="absolute inset-x-0 flex justify-center pointer-events-none z-20 px-4"
                 >
@@ -600,7 +601,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                       fontWeight: styles.bold ? 700 : 500,
                     }}
                     dir="rtl"
-                    className={`inline-block max-w-[90%] transition-all duration-100 ${subtitleFontClass}`}
+                    className={`inline-block max-w-[90%] transition-all duration-150 ${subtitleFontClass}`}
                   >
                     {activeCue.hebrewText}
                   </div>
@@ -610,20 +611,20 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
             {/* TOP BAR OVERLAY: Mode tag, Video Name, Quick Actions */}
             <div
-              className={`absolute top-0 inset-x-0 p-2.5 sm:p-3 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between gap-2 transition-opacity duration-300 z-30 ${
+              className={`absolute top-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-b from-black/85 via-black/45 to-transparent flex items-center justify-between gap-1.5 sm:gap-2 transition-opacity duration-300 z-30 ${
                 showControls ? "opacity-100" : "opacity-0 pointer-events-none"
               }`}
             >
-              <div className="flex items-center gap-2 overflow-hidden min-w-0">
-                <span className="h-8 px-2.5 flex items-center justify-center whitespace-nowrap rounded-md text-[11px] font-bold bg-blue-600/90 text-white border border-blue-400/30 shrink-0 shadow-sm">
+              <div className="flex items-center gap-1.5 overflow-hidden min-w-0">
+                <span className="h-6 sm:h-7 px-2 flex items-center justify-center whitespace-nowrap rounded-md text-[10px] sm:text-[11px] font-bold bg-blue-600/90 text-white border border-blue-400/30 shrink-0 shadow-xs">
                   {isDemo ? "סרטון הדגמה" : "קובץ מקומי"}
                 </span>
-                <span className="text-xs font-medium text-white truncate">
+                <span className="text-[11px] sm:text-xs font-medium text-white truncate max-w-[120px] sm:max-w-[220px]">
                   {videoName}
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                 {/* Instant toggle Hebrew subtitles button */}
                 <button
                   id="toggle-hebrew-subtitles-top-btn"
@@ -633,15 +634,18 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                       ? "הסתר כתוביות בעברית (לחץ להסרה מהתצוגה והשוואה למקור)"
                       : "הצג כתוביות בעברית (לחץ להפעלה מחדש)"
                   }
-                  className={`h-8 px-2.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold rounded-md border transition cursor-pointer shrink-0 shadow-sm ${
+                  className={`h-6 sm:h-7 px-2 flex items-center justify-center gap-1 text-[10px] sm:text-[11px] font-semibold rounded-md border transition cursor-pointer shrink-0 shadow-xs whitespace-nowrap ${
                     showHebrewSubtitles
                       ? "bg-blue-600/90 hover:bg-blue-500 text-white border-blue-400/40"
                       : "bg-red-950/80 hover:bg-red-900/80 text-red-200 border-red-500/40"
                   }`}
                 >
-                  <Subtitles className="w-3.5 h-3.5" />
-                  <span className="whitespace-nowrap">
+                  <Subtitles className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+                  <span className="whitespace-nowrap hidden sm:inline">
                     {showHebrewSubtitles ? "כתוביות עברית: פעיל" : "כתוביות עברית: כבוי"}
+                  </span>
+                  <span className="whitespace-nowrap sm:hidden">
+                    {showHebrewSubtitles ? "עברית: פעיל" : "עברית: כבוי"}
                   </span>
                 </button>
 
@@ -652,13 +656,13 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                   onTouchStart={() => setPreviewOriginal(true)}
                   onTouchEnd={() => setPreviewOriginal(false)}
                   title="החזק כדי לראות את הכתובית המקורית המוטמעת (הצג מקור)"
-                  className={`h-8 w-8 sm:w-auto sm:px-2.5 flex items-center justify-center gap-1 text-[11px] font-semibold rounded-md border transition cursor-pointer shrink-0 ${
+                  className={`h-6 sm:h-7 px-1.5 sm:px-2 flex items-center justify-center gap-1 text-[10px] sm:text-[11px] font-semibold rounded-md border transition cursor-pointer shrink-0 whitespace-nowrap ${
                     previewOriginal
-                      ? "bg-amber-600 text-white border-amber-500 shadow-sm"
+                      ? "bg-amber-600 text-white border-amber-500 shadow-xs"
                       : "bg-[#1f1f1f]/80 hover:bg-[#2c2c2c] text-gray-300 border-[#404040]"
                   }`}
                 >
-                  {previewOriginal ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {previewOriginal ? <EyeOff className="w-3.5 h-3.5 shrink-0" /> : <Eye className="w-3.5 h-3.5 shrink-0" />}
                   <span className="hidden sm:inline whitespace-nowrap">
                     {previewOriginal ? "רואה מקור" : "הצג מקור"}
                   </span>
@@ -668,9 +672,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 <button
                   onClick={onToggleStyles}
                   title="הגדרות עיצוב וכיסוי כתוביות"
-                  className="h-8 w-8 flex items-center justify-center bg-[#1f1f1f]/80 hover:bg-[#2c2c2c] text-gray-300 hover:text-white rounded-md border border-[#404040] transition cursor-pointer shrink-0"
+                  className="h-6 sm:h-7 w-6 sm:w-7 flex items-center justify-center bg-[#1f1f1f]/80 hover:bg-[#2c2c2c] text-gray-300 hover:text-white rounded-md border border-[#404040] transition cursor-pointer shrink-0"
                 >
-                  <Layers className="w-4 h-4" />
+                  <Layers className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
@@ -680,22 +684,22 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
               <button
                 onClick={togglePlay}
                 aria-label="נגן"
-                className="absolute inset-0 m-auto w-14 h-14 bg-blue-600/90 hover:bg-blue-600 text-white rounded-full flex items-center justify-center shadow-[0_0_25px_rgba(59,130,246,0.6)] transform hover:scale-110 transition duration-150 z-20"
+                className="absolute inset-0 m-auto w-12 h-12 sm:w-14 sm:h-14 bg-blue-600/90 hover:bg-blue-600 text-white rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(59,130,246,0.6)] transform hover:scale-105 active:scale-95 transition duration-150 z-20 cursor-pointer"
               >
-                <Play className="w-7 h-7 fill-white translate-x-0.5" />
+                <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-white translate-x-0.5" />
               </button>
             )}
 
             {/* BOTTOM CONTROLS BAR */}
             <div
-              className={`absolute bottom-0 inset-x-0 p-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col gap-2 transition-opacity duration-300 z-30 ${
+              className={`absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/95 via-black/70 to-transparent flex flex-col gap-1.5 transition-opacity duration-300 z-30 ${
                 showControls ? "opacity-100" : "opacity-0 pointer-events-none"
               }`}
             >
               {/* Scrubbing Timeline Progress Bar */}
-              <div className="relative w-full flex items-center group/timeline py-1 cursor-pointer">
+              <div className="relative w-full flex items-center group/timeline py-0.5 cursor-pointer">
                 {/* Visual cue markers on timeline */}
-                <div className="absolute inset-x-0 h-1.5 bg-gray-700/80 rounded-full overflow-hidden">
+                <div className="absolute inset-x-0 h-1 sm:h-1.5 bg-gray-700/80 rounded-full overflow-hidden">
                   <div
                     style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
                     className="h-full bg-blue-500 rounded-full relative transition-[width] duration-75"
@@ -715,7 +719,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                           width: `${Math.max(0.5, widthPercent)}%`,
                         }}
                         title={`${cue.originalText} ➔ ${cue.hebrewText}`}
-                        className="absolute h-1.5 bg-amber-400/80 rounded-sm pointer-events-none z-10"
+                        className="absolute h-1 sm:h-1.5 bg-amber-400/80 rounded-sm pointer-events-none z-10"
                       />
                     );
                   })}
@@ -728,49 +732,50 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                   step={0.05}
                   value={currentTime}
                   onChange={(e) => handleSeek(parseFloat(e.target.value))}
-                  className="w-full h-3 opacity-0 cursor-pointer z-20"
+                  className="w-full h-2.5 sm:h-3 opacity-0 cursor-pointer z-20"
                 />
               </div>
 
               {/* Action buttons row */}
-              <div className="flex items-center justify-between text-xs text-white">
-                <div className="flex items-center gap-2">
+              <div className="flex items-center justify-between text-xs text-white gap-1 flex-wrap sm:flex-nowrap">
+                <div className="flex items-center gap-1 sm:gap-1.5">
                   {/* Play / Pause */}
                   <button
                     onClick={togglePlay}
-                    className="p-1.5 hover:bg-white/10 rounded-md transition text-white"
+                    className="p-1 hover:bg-white/10 rounded-md transition text-white cursor-pointer"
+                    title={isPlaying ? "השהה (Space)" : "נגן (Space)"}
                   >
-                    {isPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-white" />}
+                    {isPlaying ? <Pause className="w-3.5 h-3.5 fill-white" /> : <Play className="w-3.5 h-3.5 fill-white" />}
                   </button>
 
-                  {/* -5s / +5s */}
+                  {/* -3s / +3s */}
                   <button
                     onClick={() => stepTime(-3)}
                     title="3 שניות אחורה"
-                    className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition"
+                    className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition cursor-pointer"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
+                    <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                   </button>
                   <button
                     onClick={() => stepTime(3)}
                     title="3 שניות קדימה"
-                    className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition"
+                    className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition cursor-pointer"
                   >
-                    <RotateCw className="w-3.5 h-3.5" />
+                    <RotateCw className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                   </button>
 
                   {/* Volume / Mute */}
                   {!isDemo && (
                     <button
                       onClick={toggleMute}
-                      className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition"
+                      className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition cursor-pointer"
                     >
-                      {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                      {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
                     </button>
                   )}
 
                   {/* Time indicator */}
-                  <div className="text-[11px] font-mono text-gray-300 flex items-center gap-1 mr-1">
+                  <div className="text-[10px] sm:text-[11px] font-mono text-gray-300 flex items-center gap-1 mr-1 whitespace-nowrap">
                     <span className="text-white font-semibold">
                       {formatTimeDisplay(currentTime)}
                     </span>
@@ -779,7 +784,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
                   {/* Instant Subtitle Visibility Toggle Button */}
                   <button
                     id="toggle-subtitles-bottom-btn"
@@ -789,23 +794,23 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                         ? "הסתר כתוביות חדשות בעברית במהלך ניגון"
                         : "הצג כתוביות חדשות בעברית"
                     }
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold border transition ${
+                    className={`h-6 px-1.5 sm:px-2 flex items-center gap-1 rounded text-[10px] sm:text-[11px] font-bold border transition whitespace-nowrap cursor-pointer shrink-0 ${
                       showHebrewSubtitles
-                        ? "bg-blue-600/30 text-blue-300 border-blue-500/40 hover:bg-blue-600/50"
+                        ? "bg-blue-600/40 text-blue-200 border-blue-500/50 hover:bg-blue-600/60"
                         : "bg-[#1e1e1e] text-gray-400 border-[#333] hover:text-white"
                     }`}
                   >
-                    <Subtitles className="w-3.5 h-3.5" />
-                    <span>עברית {showHebrewSubtitles ? "ON" : "OFF"}</span>
+                    <Subtitles className="w-3 h-3 shrink-0" />
+                    <span className="whitespace-nowrap">עברית {showHebrewSubtitles ? "ON" : "OFF"}</span>
                   </button>
 
                   {/* Playback speed selector */}
-                  <div className="flex items-center bg-[#1e1e1e] rounded border border-[#333] px-1 py-0.5">
+                  <div className="flex items-center bg-[#1e1e1e] rounded border border-[#333] px-0.5 py-0.5 shrink-0">
                     {[0.75, 1, 1.25, 1.5].map((rate) => (
                       <button
                         key={rate}
                         onClick={() => handleSpeedChange(rate)}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition ${
+                        className={`px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-mono transition cursor-pointer ${
                           playbackRate === rate
                             ? "bg-blue-600 text-white font-bold"
                             : "text-gray-400 hover:text-gray-200"
@@ -819,9 +824,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                   {/* Fullscreen */}
                   <button
                     onClick={toggleFullscreen}
-                    className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition"
+                    className="p-1 hover:bg-white/10 rounded text-gray-300 hover:text-white transition cursor-pointer shrink-0"
+                    title="מסך מלא"
                   >
-                    <Maximize2 className="w-3.5 h-3.5" />
+                    <Maximize2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                   </button>
                 </div>
               </div>

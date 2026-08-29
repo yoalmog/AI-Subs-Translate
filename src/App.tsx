@@ -35,6 +35,7 @@ import {
   clearDraftFromStorage,
   AutoSaveDraft,
 } from "./utils/autoSave";
+import { BulkShiftOptions } from "./components/BatchTimeShiftModal";
 import {
   Sparkles,
   Sliders,
@@ -45,6 +46,8 @@ import {
   HelpCircle,
   FolderCheck,
   X,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 
 const DEFAULT_STYLES: SubtitleStyleSettings = {
@@ -76,6 +79,72 @@ export default function App() {
   const [videoDuration, setVideoDuration] = useState<number>(10);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [cues, setCues] = useState<SubtitleCue[]>(DEMO_VIDEOS[0].sampleCues || []);
+  
+  // Undo / Redo history state arrays
+  const [undoHistory, setUndoHistory] = useState<SubtitleCue[][]>([]);
+  const [redoHistory, setRedoHistory] = useState<SubtitleCue[][]>([]);
+
+  const pushToUndoHistory = (prevCues: SubtitleCue[]) => {
+    setUndoHistory((prev) => [...prev.slice(-30), prevCues]);
+    setRedoHistory([]); // Clear redo stack on new user actions
+  };
+
+  const handleUndo = () => {
+    if (undoHistory.length === 0) return;
+    const historyCopy = [...undoHistory];
+    const previousState = historyCopy.pop()!;
+    setRedoHistory((prev) => [cues, ...prev]);
+    setUndoHistory(historyCopy);
+    setCues(previousState);
+    setProjectBannerMessage({
+      type: "info",
+      text: "בוצע ביטול (Undo): שוחזר מצב כתוביות קודם.",
+    });
+    setTimeout(() => setProjectBannerMessage(null), 3000);
+  };
+
+  const handleRedo = () => {
+    if (redoHistory.length === 0) return;
+    const redoCopy = [...redoHistory];
+    const nextState = redoCopy.shift()!;
+    setUndoHistory((prev) => [...prev.slice(-30), cues]);
+    setRedoHistory(redoCopy);
+    setCues(nextState);
+    setProjectBannerMessage({
+      type: "info",
+      text: "בוצע שחזור (Redo): הוחל השינוי שוב.",
+    });
+    setTimeout(() => setProjectBannerMessage(null), 3000);
+  };
+
+  // Keyboard shortcut listener for Ctrl+Z / Cmd+Z (Undo) and Ctrl+Y / Cmd+Shift+Z (Redo)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is actively typing in a standard input or textarea
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))
+      ) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [undoHistory, redoHistory, cues]);
+
   const [styles, setStyles] = useState<SubtitleStyleSettings>(DEFAULT_STYLES);
   const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>(DEFAULT_LANGUAGE);
   const [tonePreference, setTonePreference] = useState<TonePreference>("informal");
@@ -454,16 +523,19 @@ export default function App() {
     }
   };
 
-  // Cue management
+  // Cue management with Undo History tracking
   const handleUpdateCue = (updatedCue: SubtitleCue) => {
+    pushToUndoHistory(cues);
     setCues((prev) => prev.map((c) => (c.id === updatedCue.id ? updatedCue : c)));
   };
 
   const handleDeleteCue = (cueId: string) => {
+    pushToUndoHistory(cues);
     setCues((prev) => prev.filter((c) => c.id !== cueId));
   };
 
   const handleAddCue = (newCueData: Partial<SubtitleCue>) => {
+    pushToUndoHistory(cues);
     const newCue: SubtitleCue = {
       id: `cue-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       startTime: newCueData.startTime || currentTime,
@@ -477,6 +549,7 @@ export default function App() {
   };
 
   const handleShiftAllTimings = (seconds: number) => {
+    pushToUndoHistory(cues);
     setCues((prev) =>
       prev.map((c) => ({
         ...c,
@@ -486,7 +559,82 @@ export default function App() {
     );
   };
 
+  // Bulk Offset / Synchronization Handler supporting Fixed, Percentage, and Time-Range scopes
+  const handleApplyBulkShift = (options: BulkShiftOptions) => {
+    pushToUndoHistory(cues);
+    const {
+      mode,
+      shiftSeconds,
+      percentage,
+      stretchAnchor,
+      scope,
+      rangeStartTime,
+      rangeEndTime,
+      selectedCueIds,
+    } = options;
+
+    const minCueTime = cues.length > 0 ? Math.min(...cues.map((c) => c.startTime)) : 0;
+    let anchorTime = 0;
+    if (stretchAnchor === "first_cue") anchorTime = minCueTime;
+    if (stretchAnchor === "range_start" && rangeStartTime !== undefined) anchorTime = rangeStartTime;
+
+    const factor = 1 + percentage / 100;
+
+    const updated = cues.map((cue) => {
+      let isTarget = false;
+      if (scope === "all") isTarget = true;
+      else if (scope === "selected" && selectedCueIds) isTarget = selectedCueIds.includes(cue.id);
+      else if (
+        scope === "time_range" &&
+        rangeStartTime !== undefined &&
+        rangeEndTime !== undefined
+      ) {
+        isTarget = cue.startTime >= rangeStartTime && cue.startTime <= rangeEndTime;
+      }
+
+      if (!isTarget) return cue;
+
+      if (mode === "fixed") {
+        const newStart = Math.max(0, parseFloat((cue.startTime + shiftSeconds).toFixed(3)));
+        const newEnd = Math.max(newStart + 0.1, parseFloat((cue.endTime + shiftSeconds).toFixed(3)));
+        return {
+          ...cue,
+          startTime: newStart,
+          endTime: newEnd,
+          isEdited: true,
+        };
+      } else {
+        // Percentage / Drift mode
+        const newStart = Math.max(
+          0,
+          parseFloat((anchorTime + (cue.startTime - anchorTime) * factor).toFixed(3))
+        );
+        const newEnd = Math.max(
+          newStart + 0.1,
+          parseFloat((anchorTime + (cue.endTime - anchorTime) * factor).toFixed(3))
+        );
+        return {
+          ...cue,
+          startTime: newStart,
+          endTime: newEnd,
+          isEdited: true,
+        };
+      }
+    });
+
+    updated.sort((a, b) => a.startTime - b.startTime);
+    setCues(updated);
+
+    const affectedCount = updated.filter((c, i) => c !== cues[i]).length;
+    setProjectBannerMessage({
+      type: "success",
+      text: `הושלם שינוי תזמון קבוצתי עבור ${affectedCount} כתוביות! (ניתן לבטל עם Ctrl+Z)`,
+    });
+    setTimeout(() => setProjectBannerMessage(null), 5000);
+  };
+
   const handleImportSrt = (importedCues: SubtitleCue[]) => {
+    pushToUndoHistory(cues);
     setCues(importedCues);
   };
 
@@ -565,7 +713,7 @@ export default function App() {
       )}
 
       {/* Main Workspace */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-2.5 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 items-start">
         {/* LEFT COLUMN: Video Player & Quick Settings (7 cols) */}
         <div className="lg:col-span-7 flex flex-col gap-4">
           <VideoPlayer
@@ -685,8 +833,15 @@ export default function App() {
               onAddCue={handleAddCue}
               onRetranslateCue={handleRetranslateCue}
               onShiftAllTimings={handleShiftAllTimings}
+              onApplyBulkShift={handleApplyBulkShift}
               onImportSrt={handleImportSrt}
               isAnalyzing={isAnalyzing}
+              canUndo={undoHistory.length > 0}
+              canRedo={redoHistory.length > 0}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              undoCount={undoHistory.length}
+              redoCount={redoHistory.length}
               selectedLanguage={targetLanguage}
               onLanguageChange={setTargetLanguage}
               tonePreference={tonePreference}
