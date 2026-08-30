@@ -534,17 +534,21 @@ export default function App() {
         console.warn("Server returned non-JSON response:", responseText.slice(0, 150));
       }
 
-      if (!response.ok || !data) {
+      if (!response.ok || !data || data.error) {
         let errMsg = data?.error;
         if (!errMsg) {
-          if (response.status === 413) {
+          if (responseText && (responseText.trim().startsWith("<") || responseText.includes("<!DOCTYPE"))) {
+            errMsg = "שרת ה-AI חווה עומס רגעי. אנא לחץ 'נסה שוב'.";
+          } else if (response.status === 413) {
             errMsg = "גודל הפריימים גדול מדי. אנא נסה לדגום פחות פריימים.";
           } else if (response.status === 503 || response.status === 504) {
             errMsg = "שרת ה-AI חווה עומס רגעי. לחץ 'נסה שוב'.";
           } else if (response.status === 404) {
             errMsg = "שירות ה-AI אינו זמין כרגע בשרת.";
+          } else if (response.status === 200) {
+            errMsg = "תשובת ה-AI לא עובדה כראוי. לחץ 'נסה שוב'.";
           } else {
-            errMsg = `שגיאה בתקשורת עם שרת ה-AI (${response.status || "תגובה לא תקינה"}).`;
+            errMsg = `שגיאה בתקשורת עם שרת ה-AI (קוד ${response.status || "תגובה לא תקינה"}).`;
           }
         }
         throw new Error(errMsg);
@@ -599,13 +603,11 @@ export default function App() {
         friendlyMessage = "הגעת למגבלת בקשות רגעית. אנא המתן מספר שניות ולחץ 'נסה שוב'.";
       }
 
-      setAnalysisProgress({
+      setAnalysisProgress((prev) => ({
+        ...prev,
         status: "error",
-        currentFrame: 0,
-        totalFrames: 0,
-        percent: 0,
         message: friendlyMessage,
-      });
+      }));
       setIsAnalyzing(false);
     }
   };

@@ -27,8 +27,8 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // Lazy/Safe Gemini SDK initialization
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not set in the environment variables.");
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error("מפתח GEMINI_API_KEY אינו מוגדר בשרת. אנא הגדר את המפתח בהגדרות המערכת.");
   }
   return new GoogleGenAI({
     apiKey,
@@ -106,6 +106,15 @@ app.post("/api/analyze-frames", async (req, res) => {
       return res.status(400).json({ error: "No video frames provided for analysis." });
     }
 
+    // Filter out invalid/empty frame data URLs
+    const validFrames = frames.filter(
+      (f: any) => f && f.dataUrl && typeof f.dataUrl === "string" && f.dataUrl.length > 100
+    );
+
+    if (validFrames.length === 0) {
+      return res.status(400).json({ error: "כל הפריימים שנדגמו היו ריקים או בלתי תקינים." });
+    }
+
     const ai = getGeminiClient();
 
     // Prepare multimodal parts: Frame images with metadata and timestamps
@@ -114,10 +123,10 @@ app.post("/api/analyze-frames", async (req, res) => {
     // System instruction / prompt for OCR and translation
     const promptText = `
 You are a high-accuracy video subtitle OCR recognition and ${targetLanguage} localization engine.
-The user provided ${frames.length} sequential frame snapshots sampled chronologically from a video (duration: ~${videoDuration || "unknown"}s).
+The user provided ${validFrames.length} sequential frame snapshots sampled chronologically from a video (duration: ~${videoDuration || "unknown"}s).
 
 TASK & STRICT RULES:
-1. Thoroughly inspect EVERY SINGLE frame snapshot from Frame #1 to Frame #${frames.length}.
+1. Thoroughly inspect EVERY SINGLE frame snapshot from Frame #1 to Frame #${validFrames.length}.
 2. Detect, transcribe, and extract ALL burned-in subtitles, captions, and on-screen dialogue visible on any frame (in any source language: Spanish, English, French, Arabic, Russian, Japanese, German, etc.).
 3. EXHAUSTIVE COVERAGE: Do NOT skip, omit, or truncate any subtitle sentences. Capture the full spoken dialogue from the beginning of the clip to the end.
 4. TIMING & MERGING:
@@ -139,8 +148,8 @@ Return a valid JSON array of objects with keys:
 
     parts.push({ text: promptText });
 
-    for (let i = 0; i < frames.length; i++) {
-      const frame = frames[i];
+    for (let i = 0; i < validFrames.length; i++) {
+      const frame = validFrames[i];
       parts.push({
         text: `[Frame #${i + 1} at ${Number(frame.timestamp).toFixed(2)}s]:`,
       });
@@ -164,8 +173,8 @@ Return a valid JSON array of objects with keys:
       });
     }
 
-    // Candidate models with fast high-availability flash-lite and flash
-    const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    // Standard Gemini candidate models with high-availability flash
+    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
 
     const response = await generateContentWithResilience(
       ai,
@@ -334,7 +343,7 @@ app.post("/api/translate-text", async (req, res) => {
     }
 
     const ai = getGeminiClient();
-    const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
     const toneGuideline = getToneInstruction(tone, targetLanguage);
 
     const response = await generateContentWithResilience(
@@ -399,7 +408,7 @@ app.post("/api/batch-translate", async (req, res) => {
     }
 
     const ai = getGeminiClient();
-    const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
     const toneGuideline = getToneInstruction(tone, targetLanguage);
 
     // Format list of cues for translation
