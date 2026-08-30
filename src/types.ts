@@ -27,6 +27,16 @@ export interface VideoMetadata {
   file?: File;
 }
 
+export interface SubtitleStylePreset {
+  id: string;
+  name: string;
+  nameHebrew: string;
+  description: string;
+  badge?: string;
+  isBuiltIn?: boolean;
+  styles: SubtitleStyleSettings;
+}
+
 export interface SubtitleStyleSettings {
   fontSize: number; // in px or rem relative
   fontFamily: 'Heebo' | 'Rubik' | 'Assistant' | 'Varela Round' | 'sans-serif';

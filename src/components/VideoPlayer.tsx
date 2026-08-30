@@ -17,11 +17,21 @@ import {
   AlertTriangle,
   RefreshCw,
   Subtitles,
+  FileVideo,
+  Wrench,
+  CheckCircle2,
+  Cpu,
 } from "lucide-react";
 import { SubtitleCue, SubtitleStyleSettings } from "../types";
 import { formatTimeDisplay } from "../utils/timeFormat";
 import { renderDemoFrame, DEMO_CONFIGS } from "../utils/demoVideoGenerator";
 import { VideoFrameSource } from "../utils/frameSampler";
+import {
+  detectVideoFormat,
+  VideoFormatInfo,
+  createNormalizedVideoBlob,
+  transcodeVideoToWebM,
+} from "../utils/videoTypeHelper";
 
 export interface VideoPlayerRef {
   getVideoElement: () => HTMLVideoElement | null;
@@ -35,6 +45,7 @@ export interface VideoPlayerRef {
 interface VideoPlayerProps {
   videoUrl: string | null;
   videoName: string;
+  videoFile?: File | null;
   cues: SubtitleCue[];
   activeCue: SubtitleCue | null;
   styles: SubtitleStyleSettings;
@@ -52,6 +63,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     {
       videoUrl,
       videoName,
+      videoFile,
       cues,
       activeCue,
       styles,
@@ -96,6 +108,11 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const [previewOriginal, setPreviewOriginal] = useState<boolean>(false);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [formatInfo, setFormatInfo] = useState<VideoFormatInfo | null>(null);
+    const [isTranscoding, setIsTranscoding] = useState<boolean>(false);
+    const [transcodePercent, setTranscodePercent] = useState<number>(0);
+    const [transcodeMessage, setTranscodeMessage] = useState<string>("");
+    const [repairSuccessMessage, setRepairSuccessMessage] = useState<string | null>(null);
 
     const animationFrameRef = useRef<number | null>(null);
     const lastTimestampRef = useRef<number | null>(null);
@@ -108,9 +125,22 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     isPlayingRef.current = isPlaying;
     playbackRateRef.current = playbackRate;
 
-    // Reset error when URL changes
+    // Detect format information whenever a video file is loaded
+    useEffect(() => {
+      if (videoFile) {
+        detectVideoFormat(videoFile).then((info) => {
+          setFormatInfo(info);
+        });
+      } else {
+        setFormatInfo(null);
+      }
+    }, [videoFile]);
+
+    // Reset error and state when URL changes
     useEffect(() => {
       setVideoError(null);
+      setRepairSuccessMessage(null);
+      setIsTranscoding(false);
       if (isDemo) {
         setIsLoading(false);
         setDuration(10);
@@ -120,6 +150,55 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         setIsLoading(true);
       }
     }, [videoUrl, isDemo, onDurationChange]);
+
+    // Quick fix: force MP4 blob wrapping to bypass container restrictions in browser
+    const handleForceMp4Fix = () => {
+      if (!videoFile) return;
+      try {
+        const repaired = createNormalizedVideoBlob(videoFile, true);
+        if (videoRef.current) {
+          videoRef.current.src = repaired.url;
+          videoRef.current.load();
+          setVideoError(null);
+          setIsLoading(true);
+          setRepairSuccessMessage("קובץ הווידאו עודכן ל-MP4 Blob מותאם דפדפן ונטען מחדש.");
+        }
+      } catch (err) {
+        console.error("Force MP4 fix error:", err);
+      }
+    };
+
+    // In-browser transcode fallback
+    const handleTranscode = async () => {
+      if (!videoFile) return;
+      setIsTranscoding(true);
+      setTranscodePercent(0);
+      setTranscodeMessage("מכין מפענח מקומי...");
+
+      try {
+        const transcodedBlob = await transcodeVideoToWebM(
+          videoFile,
+          (percent, msg) => {
+            setTranscodePercent(percent);
+            setTranscodeMessage(msg);
+          }
+        );
+
+        const newUrl = URL.createObjectURL(transcodedBlob);
+        if (videoRef.current) {
+          videoRef.current.src = newUrl;
+          videoRef.current.load();
+          setVideoError(null);
+          setIsLoading(true);
+          setRepairSuccessMessage("הווידאו הומר בהצלחה ל-WebM נתמך דפדפן!");
+        }
+      } catch (err: any) {
+        console.error("Transcode failed:", err);
+        setTranscodeMessage(err.message || "שגיאה בהמרת הקובץ.");
+      } finally {
+        setIsTranscoding(false);
+      }
+    };
 
     // Canvas render loop for Demo videos
     const drawDemoCanvas = useCallback(
@@ -467,46 +546,121 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             </div>
           </div>
         ) : videoError ? (
-          /* Error recovery state */
-          <div className="flex flex-col items-center justify-center text-center p-6 max-w-md z-20">
-            <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mb-3 border border-amber-500/30">
-              <AlertTriangle className="w-6 h-6" />
+          /* Error recovery state with comprehensive format diagnostics and 1-click repairs */
+          <div className="flex flex-col items-center justify-center text-center p-5 max-w-lg z-20 bg-[#111111]/95 border border-[#333333] rounded-xl shadow-2xl backdrop-blur-md m-3 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-11 h-11 rounded-full bg-amber-500/15 text-amber-400 flex items-center justify-center mb-2.5 border border-amber-500/30">
+              <AlertTriangle className="w-5 h-5" />
             </div>
-            <h4 className="text-sm font-bold text-white mb-1">שגיאה בטעינת הווידאו</h4>
-            <p className="text-xs text-gray-400 mb-4">{videoError}</p>
-            <div className="flex items-center flex-wrap justify-center gap-2">
+            
+            <h4 className="text-sm font-bold text-white mb-1">שגיאה בהפעלת הווידאו בדפדפן</h4>
+            <p className="text-xs text-gray-300 mb-3 max-w-sm leading-relaxed">{videoError}</p>
+
+            {/* Video format details card if detected */}
+            {formatInfo && (
+              <div className="w-full bg-[#181818] border border-[#2a2a2a] rounded-lg p-2.5 mb-3.5 text-right flex flex-col gap-1 text-[11px]">
+                <div className="flex items-center justify-between text-gray-300">
+                  <span className="font-semibold text-gray-200">זיהוי פורמט:</span>
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono font-bold">
+                    {formatInfo.format} ({formatInfo.extension.toUpperCase()})
+                  </span>
+                </div>
+                <div className="text-gray-400">
+                  <span>MIME Type: </span>
+                  <span className="font-mono text-gray-300">{formatInfo.mimeType}</span>
+                </div>
+                {formatInfo.suggestion && (
+                  <div className="text-amber-300/90 text-[10px] mt-0.5">
+                    💡 {formatInfo.suggestion}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Transcoding Progress Bar */}
+            {isTranscoding && (
+              <div className="w-full bg-[#181818] border border-blue-500/30 rounded-lg p-3 mb-3 text-right">
+                <div className="flex items-center justify-between text-xs text-blue-300 mb-1.5">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <Cpu className="w-3.5 h-3.5 animate-spin" />
+                    {transcodeMessage}
+                  </span>
+                  <span className="font-mono font-bold">{transcodePercent}%</span>
+                </div>
+                <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    style={{ width: `${transcodePercent}%` }}
+                    className="h-full bg-gradient-to-r from-blue-600 to-indigo-500 rounded-full transition-all duration-200"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Repair Success Notification */}
+            {repairSuccessMessage && (
+              <div className="w-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-200 rounded-lg p-2 mb-3 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{repairSuccessMessage}</span>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex items-center flex-wrap justify-center gap-2 w-full">
+              {/* 1. Quick Fix / Force MP4 Blob */}
+              {videoFile && (
+                <button
+                  onClick={handleForceMp4Fix}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-md transition shadow-md cursor-pointer"
+                  title="עטוף את הקובץ ב-Blob תואם MP4 כדי לעקוף חסימת דפדפן"
+                >
+                  <Wrench className="w-3.5 h-3.5" />
+                  <span>תיקון סוג קובץ מהיר</span>
+                </button>
+              )}
+
+              {/* 2. Start Gemini Subtitle Scan Directly */}
               <button
-                onClick={() => {
-                  setVideoError(null);
-                  setIsLoading(true);
-                  if (videoRef.current && videoUrl) {
-                    videoRef.current.src = videoUrl;
-                    videoRef.current.load();
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-md transition shadow-md cursor-pointer"
+                onClick={onStartAnalysis}
+                disabled={isAnalyzing}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-md transition shadow-md cursor-pointer disabled:opacity-50"
+                title="סרוק כתוביות מוטמעות ותרגם ישירות עם Gemini AI"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>נסה שוב</span>
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <span>סרוק כתוביות ב-AI</span>
               </button>
+
+              {/* 3. Re-encode / Transcode locally */}
+              {videoFile && !isTranscoding && (
+                <button
+                  onClick={handleTranscode}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#202020] hover:bg-[#2c2c2c] text-gray-200 text-xs font-semibold rounded-md border border-[#3a3a3a] transition cursor-pointer"
+                  title="המר את הקובץ ל-WebM נתמך דפדפן ישירות במכשירך"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                  <span>המרת קובץ בדפדפן</span>
+                </button>
+              )}
+
+              {/* 4. Reload Demo */}
               {onReloadDemo && (
                 <button
                   onClick={onReloadDemo}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#222222] hover:bg-[#2c2c2c] text-gray-200 text-xs font-semibold rounded-md transition border border-[#3a3a3a] cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#262626] text-gray-300 text-xs font-medium rounded-md transition border border-[#333333] cursor-pointer"
                 >
-                  <span>טען סרטון הדגמה</span>
+                  <span>סרטון הדגמה</span>
                 </button>
               )}
+
+              {/* 5. Choose another file */}
               <label
                 htmlFor="player-error-file-input"
-                className="px-3.5 py-1.5 bg-[#1a1a1a] hover:bg-[#262626] text-gray-300 text-xs font-semibold rounded-md border border-[#333333] cursor-pointer transition"
+                className="px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#262626] text-gray-300 text-xs font-medium rounded-md border border-[#333333] cursor-pointer transition"
               >
                 בחר קובץ אחר
               </label>
               <input
                 id="player-error-file-input"
                 type="file"
-                accept="video/mp4,video/webm,video/ogg,video/quicktime,video/*"
+                accept="video/*, .mp4, .m4v, .webm, .mov, .qt, .mkv, .avi, .ts, .3gp, .wmv, .ogv, .flv, video/mp4, video/webm, video/quicktime, video/x-matroska"
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
@@ -619,6 +773,11 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 <span className="h-6 sm:h-7 px-2 flex items-center justify-center whitespace-nowrap rounded-md text-[10px] sm:text-[11px] font-bold bg-blue-600/90 text-white border border-blue-400/30 shrink-0 shadow-xs">
                   {isDemo ? "סרטון הדגמה" : "קובץ מקומי"}
                 </span>
+                {formatInfo && (
+                  <span className="h-6 sm:h-7 px-1.5 hidden sm:flex items-center justify-center whitespace-nowrap rounded-md text-[10px] font-semibold bg-[#222222] text-gray-300 border border-[#3a3a3a] shrink-0 font-mono">
+                    {formatInfo.format}
+                  </span>
+                )}
                 <span className="text-[11px] sm:text-xs font-medium text-white truncate max-w-[120px] sm:max-w-[220px]">
                   {videoName}
                 </span>

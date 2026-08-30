@@ -12,6 +12,7 @@ import {
   FolderOpen,
   FolderArchive,
   Package,
+  Gauge,
 } from "lucide-react";
 import { DEMO_VIDEOS } from "../data/demoVideos";
 import { DemoVideo, SubtitleProjectBundle } from "../types";
@@ -23,11 +24,13 @@ interface HeaderProps {
   onStartAnalysis: () => void;
   onOpenExport: () => void;
   onOpenStyles: () => void;
+  onToggleEfficiencyDashboard?: () => void;
   onImportProject?: (bundle: SubtitleProjectBundle) => void;
   hasVideo: boolean;
   hasCues: boolean;
   isAnalyzing: boolean;
   showStyles: boolean;
+  showEfficiencyDashboard?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,11 +39,13 @@ export const Header: React.FC<HeaderProps> = ({
   onStartAnalysis,
   onOpenExport,
   onOpenStyles,
+  onToggleEfficiencyDashboard,
   onImportProject,
   hasVideo,
   hasCues,
   isAnalyzing,
   showStyles,
+  showEfficiencyDashboard,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectFileInputRef = useRef<HTMLInputElement>(null);
@@ -177,7 +182,7 @@ export const Header: React.FC<HeaderProps> = ({
             type="file"
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept="video/*"
+            accept="video/*, .mp4, .m4v, .webm, .mov, .qt, .mkv, .avi, .ts, .3gp, .wmv, .ogv, .flv, video/mp4, video/webm, video/quicktime, video/x-matroska, video/x-msvideo"
             className="hidden"
           />
           <button
@@ -203,6 +208,24 @@ export const Header: React.FC<HeaderProps> = ({
             <Sliders className="w-3.5 h-3.5 text-blue-400 shrink-0" />
             <span>הגדרות כיסוי ועיצוב</span>
           </button>
+
+          {/* Efficiency Dashboard Button */}
+          {onToggleEfficiencyDashboard && (
+            <button
+              id="toggle-efficiency-btn"
+              onClick={onToggleEfficiencyDashboard}
+              className={`h-8 items-center gap-1.5 px-3 text-xs font-medium rounded-lg border transition whitespace-nowrap shrink-0 cursor-pointer ${
+                showEfficiencyDashboard
+                  ? "bg-indigo-600/20 text-indigo-400 border-indigo-500/50 shadow-inner"
+                  : "bg-[#1a1a1a] text-gray-300 border-[#333333] hover:bg-[#262626] hover:text-white"
+              }`}
+              title="דאשבורד יתרות ומהירות קריאה"
+            >
+              <Gauge className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="hidden sm:inline">דאשבורד קריאה</span>
+              <span className="sm:hidden">דאשבורד</span>
+            </button>
+          )}
 
           {/* AI Subtitle Scan & Translate Button */}
           <button

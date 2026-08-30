@@ -13,6 +13,12 @@ import {
   StyleControls,
 } from "./components/StyleControls";
 import {
+  AudioWaveform,
+} from "./components/AudioWaveform";
+import {
+  EfficiencyDashboard,
+} from "./components/EfficiencyDashboard";
+import {
   AnalysisModal,
 } from "./components/AnalysisModal";
 import {
@@ -29,6 +35,7 @@ import {
 import { DEMO_VIDEOS } from "./data/demoVideos";
 import { TARGET_LANGUAGES, TargetLanguage, DEFAULT_LANGUAGE } from "./data/languages";
 import { sampleVideoFrames } from "./utils/frameSampler";
+import { createNormalizedVideoBlob } from "./utils/videoTypeHelper";
 import {
   saveDraftToStorage,
   loadDraftFromStorage,
@@ -75,6 +82,7 @@ const DEFAULT_STYLES: SubtitleStyleSettings = {
 
 export default function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>("demo:demo-space");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoName, setVideoName] = useState<string>(DEMO_VIDEOS[0].title);
   const [videoDuration, setVideoDuration] = useState<number>(10);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -168,7 +176,105 @@ export default function App() {
 
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [showStyles, setShowStyles] = useState<boolean>(false);
+  const [showEfficiencyDashboard, setShowEfficiencyDashboard] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<"editor" | "styles">("editor");
+
+  // Auto-align cues to speech boundaries from waveform
+  const handleAutoAlignCuesToSpeech = (alignedCues: SubtitleCue[]) => {
+    pushToUndoHistory(cues);
+    setCues(alignedCues);
+    setProjectBannerMessage({
+      type: "success",
+      text: "הכתוביות סונכרנו בהצלחה לגבולות הדיבור הפעיל שזוהו בגל הקול! (ניתן לבטל עם Ctrl+Z)",
+    });
+    setTimeout(() => setProjectBannerMessage(null), 4000);
+  };
+
+  // Split cue into two balanced parts to lower CPS text density
+  const handleSplitCue = (cueId: string) => {
+    const cueIndex = cues.findIndex((c) => c.id === cueId);
+    if (cueIndex === -1) return;
+    const targetCue = cues[cueIndex];
+
+    const hebWords = targetCue.hebrewText.trim().split(/\s+/);
+    const origWords = targetCue.originalText.trim().split(/\s+/);
+
+    if (hebWords.length < 2) {
+      setProjectBannerMessage({
+        type: "info",
+        text: "כתובית זו קצרה מדי ולא ניתן לפצלה למילים נפרדות.",
+      });
+      setTimeout(() => setProjectBannerMessage(null), 3000);
+      return;
+    }
+
+    const midHeb = Math.ceil(hebWords.length / 2);
+    const midOrig = Math.ceil(origWords.length / 2);
+
+    const text1 = hebWords.slice(0, midHeb).join(" ");
+    const text2 = hebWords.slice(midHeb).join(" ");
+    const orig1 = origWords.slice(0, midOrig).join(" ");
+    const orig2 = origWords.slice(midOrig).join(" ");
+
+    const totalDur = targetCue.endTime - targetCue.startTime;
+    const splitTime = targetCue.startTime + (totalDur * (text1.length / (targetCue.hebrewText.length || 1)));
+
+    const cue1: SubtitleCue = {
+      ...targetCue,
+      id: `cue-split-1-${Date.now()}`,
+      endTime: Number(splitTime.toFixed(2)),
+      hebrewText: text1,
+      originalText: orig1,
+      isEdited: true,
+    };
+
+    const cue2: SubtitleCue = {
+      ...targetCue,
+      id: `cue-split-2-${Date.now()}`,
+      startTime: Number(splitTime.toFixed(2)),
+      hebrewText: text2,
+      originalText: orig2,
+      isEdited: true,
+    };
+
+    pushToUndoHistory(cues);
+    const newCues = [...cues];
+    newCues.splice(cueIndex, 1, cue1, cue2);
+    newCues.sort((a, b) => a.startTime - b.startTime);
+    setCues(newCues);
+
+    setProjectBannerMessage({
+      type: "success",
+      text: `הכתובית הופרדה בהצלחה ל-2 כתוביות קצרות ונוחות לקריאה!`,
+    });
+    setTimeout(() => setProjectBannerMessage(null), 4000);
+  };
+
+  // Extend cue display duration by +0.8s to lower CPS
+  const handleExtendCue = (cueId: string) => {
+    const cueIndex = cues.findIndex((c) => c.id === cueId);
+    if (cueIndex === -1) return;
+    const targetCue = cues[cueIndex];
+    const sorted = [...cues].sort((a, b) => a.startTime - b.startTime);
+    const sortedIdx = sorted.findIndex((c) => c.id === cueId);
+
+    let maxAllowedEnd = videoDuration || 1000;
+    if (sortedIdx < sorted.length - 1) {
+      maxAllowedEnd = sorted[sortedIdx + 1].startTime - 0.05;
+    }
+
+    const newEndTime = Math.min(maxAllowedEnd, Number((targetCue.endTime + 0.8).toFixed(2)));
+
+    pushToUndoHistory(cues);
+    const updated = cues.map((c) => (c.id === cueId ? { ...c, endTime: newEndTime, isEdited: true } : c));
+    setCues(updated);
+
+    setProjectBannerMessage({
+      type: "success",
+      text: `זמן התצוגה של הכתובית הוארך ל-${newEndTime.toFixed(1)} שניות לשיפור קצב הקריאה!`,
+    });
+    setTimeout(() => setProjectBannerMessage(null), 4000);
+  };
 
   const playerRef = useRef<VideoPlayerRef>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -269,20 +375,9 @@ export default function App() {
       } catch (_) {}
     }
 
-    let mimeType = file.type;
-    const nameLower = file.name.toLowerCase();
-    if (!mimeType || mimeType === "application/octet-stream" || mimeType === "") {
-      if (nameLower.endsWith(".mp4") || nameLower.endsWith(".m4v")) mimeType = "video/mp4";
-      else if (nameLower.endsWith(".webm")) mimeType = "video/webm";
-      else if (nameLower.endsWith(".mov") || nameLower.endsWith(".qt")) mimeType = "video/quicktime";
-      else if (nameLower.endsWith(".ogg") || nameLower.endsWith(".ogv")) mimeType = "video/ogg";
-      else if (nameLower.endsWith(".mkv")) mimeType = "video/x-matroska";
-      else mimeType = "video/mp4";
-    }
-
-    const safeBlob = file.type ? file : new Blob([file], { type: mimeType });
-    const url = URL.createObjectURL(safeBlob);
-    setVideoUrl(url);
+    setVideoFile(file);
+    const normalized = createNormalizedVideoBlob(file);
+    setVideoUrl(normalized.url);
     setVideoName(file.name);
     setCues([]); // Reset cues for new video
     setCurrentTime(0);
@@ -290,6 +385,7 @@ export default function App() {
 
   // Handle selecting a demo video
   const handleSelectDemo = (demo: DemoVideo) => {
+    setVideoFile(null);
     setVideoUrl(`demo:${demo.id}`);
     setVideoName(demo.title);
     setCues(demo.sampleCues ? [...demo.sampleCues] : []);
@@ -722,11 +818,13 @@ export default function App() {
         onStartAnalysis={handleStartAnalysis}
         onOpenExport={() => setShowExportModal(true)}
         onOpenStyles={() => setShowStyles(!showStyles)}
+        onToggleEfficiencyDashboard={() => setShowEfficiencyDashboard(!showEfficiencyDashboard)}
         onImportProject={handleImportProjectBundle}
         hasVideo={!!videoUrl}
         hasCues={cues.length > 0}
         isAnalyzing={isAnalyzing}
         showStyles={showStyles}
+        showEfficiencyDashboard={showEfficiencyDashboard}
       />
 
       {/* Project Status Notification Banner */}
@@ -750,12 +848,13 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-2.5 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 items-start">
-        {/* LEFT COLUMN: Video Player & Quick Settings (7 cols) */}
+        {/* LEFT COLUMN: Video Player, Waveform & Quick Settings (7 cols) */}
         <div className="lg:col-span-7 flex flex-col gap-4">
           <VideoPlayer
             ref={playerRef}
             videoUrl={videoUrl}
             videoName={videoName}
+            videoFile={videoFile}
             cues={cues}
             activeCue={activeCue}
             styles={styles}
@@ -766,6 +865,20 @@ export default function App() {
             onStartAnalysis={handleStartAnalysis}
             isAnalyzing={isAnalyzing}
             onReloadDemo={() => handleSelectDemo(DEMO_VIDEOS[0])}
+          />
+
+          {/* SIMPLIFIED AUDIO WAVEFORM VISUALIZATION */}
+          <AudioWaveform
+            videoFile={videoFile}
+            videoUrl={videoUrl}
+            duration={videoDuration}
+            currentTime={currentTime}
+            cues={cues}
+            activeCueId={activeCue?.id}
+            onSeekTo={(time) => {
+              playerRef.current?.seekTo(time);
+            }}
+            onAutoAlignCuesToSpeech={handleAutoAlignCuesToSpeech}
           />
 
           {/* Quick Helper Banner */}
@@ -828,6 +941,22 @@ export default function App() {
 
         {/* RIGHT COLUMN: Subtitle Editor & Tools (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-4">
+          {/* Efficiency Dashboard Panel (When toggled) */}
+          {showEfficiencyDashboard && (
+            <div className="animate-in fade-in slide-in-from-top-2">
+              <EfficiencyDashboard
+                cues={cues}
+                videoDuration={videoDuration}
+                onSeekTo={(time) => {
+                  playerRef.current?.seekTo(time);
+                }}
+                onSplitCue={handleSplitCue}
+                onExtendCue={handleExtendCue}
+                onClose={() => setShowEfficiencyDashboard(false)}
+              />
+            </div>
+          )}
+
           {/* Mobile Tab switcher between Editor and Styles */}
           <div className="flex lg:hidden bg-[#111111] p-1 rounded-lg border border-[#222222] text-xs font-bold">
             <button

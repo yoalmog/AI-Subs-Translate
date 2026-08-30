@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import {
   Sliders,
   Type,
@@ -8,8 +8,18 @@ import {
   RotateCcw,
   Sparkles,
   Check,
+  Bookmark,
+  Plus,
+  Trash2,
+  CheckCircle2,
 } from "lucide-react";
-import { SubtitleStyleSettings } from "../types";
+import { SubtitleStyleSettings, SubtitleStylePreset } from "../types";
+import {
+  BUILT_IN_PRESETS,
+  getCustomPresets,
+  saveCustomPreset,
+  deleteCustomPreset,
+} from "../data/stylePresets";
 
 interface StyleControlsProps {
   styles: SubtitleStyleSettings;
@@ -22,6 +32,46 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
   onChange,
   onReset,
 }) => {
+  const [customPresets, setCustomPresets] = useState<SubtitleStylePreset[]>([]);
+  const [activePresetId, setActivePresetId] = useState<string | null>("netflix-classic");
+  const [isSavingPreset, setIsSavingPreset] = useState<boolean>(false);
+  const [newPresetName, setNewPresetName] = useState<string>("");
+  const [presetSavedNotice, setPresetSavedNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCustomPresets(getCustomPresets());
+  }, []);
+
+  const allPresets = [...BUILT_IN_PRESETS, ...customPresets];
+
+  const handleSelectPreset = (preset: SubtitleStylePreset) => {
+    setActivePresetId(preset.id);
+    onChange({ ...preset.styles });
+  };
+
+  const handleSaveCustomPresetSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPresetName.trim()) return;
+
+    const created = saveCustomPreset(newPresetName.trim(), styles);
+    setCustomPresets(getCustomPresets());
+    setActivePresetId(created.id);
+    setNewPresetName("");
+    setIsSavingPreset(false);
+    setPresetSavedNotice(`ערכת העיצוב "${created.name}" נשמרה בהצלחה!`);
+    setTimeout(() => setPresetSavedNotice(null), 3000);
+  };
+
+  const handleDeleteCustomPreset = (id: string, name: string) => {
+    const updated = deleteCustomPreset(id);
+    setCustomPresets(updated);
+    if (activePresetId === id) {
+      setActivePresetId("netflix-classic");
+    }
+    setPresetSavedNotice(`ערכת העיצוב "${name}" הוסרה.`);
+    setTimeout(() => setPresetSavedNotice(null), 3000);
+  };
+
   const colorPresets = [
     { label: "לבן", value: "#FFFFFF" },
     { label: "צהוב", value: "#FBBF24" },
@@ -54,6 +104,113 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
           <RotateCcw className="w-3.5 h-3.5" />
           <span>איפוס</span>
         </button>
+      </div>
+
+      {/* SECTION 0: Style Presets Manager (ערכות עיצוב מוכנות) */}
+      <div className="bg-[#111111] border border-[#262626] rounded-lg p-3.5 flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bookmark className="w-4 h-4 text-purple-400" />
+            <span className="text-xs font-bold text-gray-200">
+              ערכות עיצוב מוכנות (Presets System)
+            </span>
+          </div>
+          <button
+            onClick={() => setIsSavingPreset(!isSavingPreset)}
+            className="flex items-center gap-1 text-xs text-purple-300 hover:text-white px-2.5 py-1 rounded bg-purple-600/20 border border-purple-500/30 hover:bg-purple-600/30 transition cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>שמור ערכה מותאמת אישית</span>
+          </button>
+        </div>
+
+        {presetSavedNotice && (
+          <div className="bg-purple-950/70 border border-purple-500/40 text-purple-200 text-xs px-3 py-1.5 rounded-md flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
+            <span>{presetSavedNotice}</span>
+          </div>
+        )}
+
+        {/* Form to save new custom preset */}
+        {isSavingPreset && (
+          <form onSubmit={handleSaveCustomPresetSubmit} className="flex items-center gap-2 bg-[#181818] p-2 rounded-lg border border-[#333333] animate-in fade-in duration-200">
+            <input
+              type="text"
+              placeholder="שם ערכת העיצוב החדשה (לדוגמה: הסגנון שלי ליוטיוב)"
+              value={newPresetName}
+              onChange={(e) => setNewPresetName(e.target.value)}
+              className="flex-1 bg-[#111111] border border-[#333333] text-white text-xs px-3 py-1.5 rounded focus:outline-none focus:border-purple-500"
+              autoFocus
+            />
+            <button
+              type="submit"
+              disabled={!newPresetName.trim()}
+              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold rounded transition cursor-pointer"
+            >
+              שמור
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsSavingPreset(false)}
+              className="px-2.5 py-1.5 text-gray-400 hover:text-white text-xs"
+            >
+              ביטול
+            </button>
+          </form>
+        )}
+
+        {/* Presets Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+          {allPresets.map((preset) => {
+            const isActive = activePresetId === preset.id;
+            return (
+              <div
+                key={preset.id}
+                onClick={() => handleSelectPreset(preset)}
+                className={`relative p-2.5 rounded-lg border text-right transition cursor-pointer flex flex-col justify-between gap-1.5 ${
+                  isActive
+                    ? "bg-purple-950/30 border-purple-500 shadow-md ring-1 ring-purple-500/40"
+                    : "bg-[#161616] border-[#292929] hover:bg-[#1f1f1f] hover:border-[#383838]"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-xs font-bold text-white truncate">{preset.nameHebrew}</span>
+                  {preset.badge && (
+                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold shrink-0 ${
+                      preset.isBuiltIn ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    }`}>
+                      {preset.badge}
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-gray-400 line-clamp-2 leading-tight">
+                  {preset.description}
+                </p>
+
+                <div className="flex items-center justify-between pt-1 border-t border-[#222222] mt-0.5">
+                  <div className="flex items-center gap-1 text-[10px] text-gray-300">
+                    <span className="w-2.5 h-2.5 rounded-full border border-gray-600" style={{ backgroundColor: preset.styles.textColor }}></span>
+                    <span>{preset.styles.fontFamily}</span>
+                  </div>
+
+                  {!preset.isBuiltIn && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCustomPreset(preset.id, preset.nameHebrew);
+                      }}
+                      className="text-gray-500 hover:text-red-400 p-0.5 rounded transition"
+                      title="מחק ערכה מותאמת אישית"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* SECTION 1: Hardcoded Subtitle Cover-up Mask (הסתרת כתוביות מקוריות) */}
