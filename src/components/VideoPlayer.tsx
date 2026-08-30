@@ -407,19 +407,32 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     // Play/Pause toggle
     const togglePlay = () => {
       if (isDemo) {
-        setIsPlaying(!isPlaying);
+        setIsPlaying((prev) => !prev);
       } else if (videoRef.current) {
-        if (isPlaying) {
-          videoRef.current.pause();
-        } else {
-          videoRef.current.play().catch((err) => {
-            console.warn("Play error, trying muted autoplay fallback:", err);
-            if (videoRef.current) {
-              videoRef.current.muted = true;
+        const video = videoRef.current;
+        if (video.paused) {
+          video
+            .play()
+            .then(() => {
+              setIsPlaying(true);
+            })
+            .catch((err) => {
+              console.warn("Play error, trying muted autoplay fallback:", err);
+              video.muted = true;
               setIsMuted(true);
-              videoRef.current.play().catch(console.error);
-            }
-          });
+              video
+                .play()
+                .then(() => {
+                  setIsPlaying(true);
+                })
+                .catch((e) => {
+                  console.error("Muted play also failed:", e);
+                  setIsPlaying(false);
+                });
+            });
+        } else {
+          video.pause();
+          setIsPlaying(false);
         }
       }
     };
@@ -843,9 +856,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
               <button
                 onClick={togglePlay}
                 aria-label="נגן"
-                className="absolute inset-0 m-auto w-12 h-12 sm:w-14 sm:h-14 bg-blue-600/90 hover:bg-blue-600 text-white rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(59,130,246,0.6)] transform hover:scale-105 active:scale-95 transition duration-150 z-20 cursor-pointer"
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 bg-blue-600/90 hover:bg-blue-600 text-white rounded-full flex items-center justify-center shadow-[0_0_25px_rgba(59,130,246,0.7)] transform hover:scale-105 active:scale-95 transition duration-150 z-20 cursor-pointer pointer-events-auto"
               >
-                <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-white translate-x-0.5" />
+                <Play className="w-7 h-7 fill-white translate-x-0.5" />
               </button>
             )}
 

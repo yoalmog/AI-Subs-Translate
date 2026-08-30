@@ -147,40 +147,29 @@ export function createNormalizedVideoBlob(file: File, mimeTypeOverride?: string 
   mimeType: string;
 } {
   let targetMime = typeof mimeTypeOverride === "string" ? mimeTypeOverride : (mimeTypeOverride === true ? "video/mp4" : file.type);
-  const nameLower = file.name.toLowerCase();
+  const nameLower = file.name ? file.name.toLowerCase() : "";
 
-  // Fix known problematic MIME types for browser HTML5 video
-  if (
-    !targetMime ||
-    targetMime === "application/octet-stream" ||
-    targetMime === "" ||
-    targetMime === "video/x-matroska" ||
-    targetMime === "video/mkv"
-  ) {
+  if (!targetMime || targetMime === "application/octet-stream" || targetMime === "") {
     if (nameLower.endsWith(".webm")) {
       targetMime = "video/webm";
     } else if (nameLower.endsWith(".ogg") || nameLower.endsWith(".ogv")) {
       targetMime = "video/ogg";
-    } else if (nameLower.endsWith(".mov") || nameLower.endsWith(".qt")) {
-      // In Chrome/Edge/Android, video/mp4 often plays MOV files better than video/quicktime
-      targetMime = "video/mp4";
     } else {
-      // For MP4, MKV (which often contains H.264 streams) or unknown, video/mp4 has maximum browser hardware acceleration
       targetMime = "video/mp4";
     }
   }
 
-  // Create a clean new blob with explicit MIME type
+  // Use URL.createObjectURL directly on the File object so browsers retain native
+  // byte-range request support for video playback and scrubbing.
   try {
-    const safeBlob = new Blob([file], { type: targetMime });
     return {
-      url: URL.createObjectURL(safeBlob),
+      url: URL.createObjectURL(file),
       mimeType: targetMime,
     };
   } catch (err) {
-    console.warn("Failed to create explicit Blob, falling back to direct file object URL:", err);
+    console.warn("Failed to create object URL from file:", err);
     return {
-      url: URL.createObjectURL(file),
+      url: "",
       mimeType: targetMime || "video/mp4",
     };
   }
@@ -188,12 +177,34 @@ export function createNormalizedVideoBlob(file: File, mimeTypeOverride?: string 
 
 /**
  * Converts or extracts frames from an unsupported video file into a standard playable WebM video
- * using client-side Canvas and MediaRecorder.
+ * using client-side Canvas and MediaRecorder. Accepts either a File or HTMLVideoElement.
  */
 export async function transcodeVideoToWebM(
-  sourceVideo: HTMLVideoElement,
+  input: File | HTMLVideoElement,
   onProgress?: (percent: number, message: string) => void
 ): Promise<Blob> {
+  let sourceVideo: HTMLVideoElement;
+  let objectUrlToRevoke: string | null = null;
+
+  if (input instanceof File) {
+    sourceVideo = document.createElement("video");
+    sourceVideo.muted = true;
+    sourceVideo.playsInline = true;
+    objectUrlToRevoke = URL.createObjectURL(input);
+    sourceVideo.src = objectUrlToRevoke;
+
+    await new Promise<void>((resolve) => {
+      const onMeta = () => {
+        sourceVideo.removeEventListener("loadedmetadata", onMeta);
+        resolve();
+      };
+      sourceVideo.addEventListener("loadedmetadata", onMeta);
+      setTimeout(resolve, 3000); // Safety fallback
+    });
+  } else {
+    sourceVideo = input;
+  }
+
   const canvas = document.createElement("canvas");
   const width = sourceVideo.videoWidth || 854;
   const height = sourceVideo.videoHeight || 480;
@@ -235,7 +246,7 @@ export async function transcodeVideoToWebM(
         resolve();
       };
       sourceVideo.addEventListener("seeked", onSeeked, { once: true });
-      setTimeout(resolve, 150); // Timeout safety
+      setTimeout(resolve, 120); // Timeout safety
     });
 
     ctx.drawImage(sourceVideo, 0, 0, width, height);
@@ -249,6 +260,12 @@ export async function transcodeVideoToWebM(
   await new Promise<void>((resolve) => {
     recorder.onstop = () => resolve();
   });
+
+  if (objectUrlToRevoke) {
+    try {
+      URL.revokeObjectURL(objectUrlToRevoke);
+    } catch (_) {}
+  }
 
   return new Blob(chunks, { type: "video/webm" });
 }
