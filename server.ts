@@ -174,7 +174,7 @@ Return a valid JSON array of objects with keys:
     }
 
     // Standard Gemini candidate models with high-availability flash
-    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
 
     const response = await generateContentWithResilience(
       ai,
@@ -343,7 +343,7 @@ app.post("/api/translate-text", async (req, res) => {
     }
 
     const ai = getGeminiClient();
-    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
     const toneGuideline = getToneInstruction(tone, targetLanguage);
 
     const response = await generateContentWithResilience(
@@ -408,7 +408,7 @@ app.post("/api/batch-translate", async (req, res) => {
     }
 
     const ai = getGeminiClient();
-    const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
     const toneGuideline = getToneInstruction(tone, targetLanguage);
 
     // Format list of cues for translation
