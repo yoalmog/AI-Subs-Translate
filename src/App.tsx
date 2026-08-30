@@ -790,7 +790,13 @@ export default function App() {
       if (match) {
         setTargetLanguage(match);
       } else {
-        setTargetLanguage(bundle.targetLanguage);
+        setTargetLanguage({
+          code: bundle.targetLanguage.code,
+          name: bundle.targetLanguage.name,
+          nativeName: bundle.targetLanguage.nativeName,
+          flag: bundle.targetLanguage.flag,
+          dir: bundle.targetLanguage.code === "he" || bundle.targetLanguage.code === "ar" ? "rtl" : "ltr",
+        });
       }
     }
     if (bundle.metadata?.tonePreference) {

@@ -57,6 +57,8 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
   const safeDuration = duration && isFinite(duration) && duration > 0 ? duration : 10;
   const numBins = Math.min(800, Math.max(200, Math.floor(safeDuration * 25)));
 
+  const cachedAudioPeaksRef = useRef<{ file: File | null; peaks: AudioPeakPoint[] } | null>(null);
+
   // Generate real audio peaks or realistic synthetic speech envelope
   useEffect(() => {
     let isCancelled = false;
@@ -64,10 +66,21 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     async function extractAudioData() {
       setIsLoadingAudio(true);
 
+      // Check cache first
+      if (videoFile && cachedAudioPeaksRef.current && cachedAudioPeaksRef.current.file === videoFile) {
+        if (!isCancelled) {
+          setPeaks(cachedAudioPeaksRef.current.peaks);
+          setIsLoadingAudio(false);
+        }
+        return;
+      }
+
       // Attempt real AudioContext decoding if videoFile is provided
-      if (videoFile && window.AudioContext) {
+      if (videoFile && (window.AudioContext || (window as any).webkitAudioContext)) {
+        let audioCtx: AudioContext | null = null;
         try {
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          audioCtx = new AudioContextClass();
           const arrayBuffer = await videoFile.arrayBuffer();
           const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
           
@@ -96,14 +109,21 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
             });
           }
 
-          audioCtx.close();
+          cachedAudioPeaksRef.current = { file: videoFile, peaks: extractedPeaks };
+
           if (!isCancelled) {
             setPeaks(extractedPeaks);
             setIsLoadingAudio(false);
-            return;
           }
+          return;
         } catch (err) {
           console.warn("Real audio decoding fallback to speech pattern model:", err);
+        } finally {
+          if (audioCtx && audioCtx.state !== "closed") {
+            try {
+              audioCtx.close();
+            } catch (_) {}
+          }
         }
       }
 
@@ -155,7 +175,7 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [videoFile, safeDuration, cues.length, numBins]);
+  }, [videoFile, safeDuration, numBins]);
 
   // Identify subtitle cues that overlap silent gaps
   const gapOverlaps = useMemo(() => {

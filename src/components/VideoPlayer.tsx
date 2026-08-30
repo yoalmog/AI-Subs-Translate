@@ -574,7 +574,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 <div className="flex items-center justify-between text-gray-300">
                   <span className="font-semibold text-gray-200">זיהוי פורמט:</span>
                   <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono font-bold">
-                    {formatInfo.format} ({formatInfo.extension.toUpperCase()})
+                    {formatInfo.detectedFormat}
                   </span>
                 </div>
                 <div className="text-gray-400">
@@ -749,14 +749,17 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 >
                   <div
                     style={{
-                      backgroundColor:
-                        styles.backgroundOpacity > 0
-                          ? `rgba(${parseInt(styles.backgroundColor.slice(1, 3), 16) || 0}, ${
-                              parseInt(styles.backgroundColor.slice(3, 5), 16) || 0
-                            }, ${
-                              parseInt(styles.backgroundColor.slice(5, 7), 16) || 0
-                            }, ${styles.backgroundOpacity})`
-                          : "transparent",
+                      backgroundColor: (() => {
+                        if (!styles.backgroundOpacity || styles.backgroundOpacity <= 0) return "transparent";
+                        const hex = styles.backgroundColor || "#000000";
+                        let clean = hex.replace("#", "");
+                        if (clean.length === 3) clean = clean.split("").map((c) => c + c).join("");
+                        const num = parseInt(clean, 16);
+                        const r = !isNaN(num) && clean.length === 6 ? (num >> 16) & 255 : 0;
+                        const g = !isNaN(num) && clean.length === 6 ? (num >> 8) & 255 : 0;
+                        const b = !isNaN(num) && clean.length === 6 ? num & 255 : 0;
+                        return `rgba(${r}, ${g}, ${b}, ${styles.backgroundOpacity})`;
+                      })(),
                       color: styles.textColor || "#ffffff",
                       fontSize: `${Math.max(14, styles.fontSize)}px`,
                       padding: `${styles.boxPadding}px ${styles.boxPadding * 2}px`,
@@ -788,7 +791,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 </span>
                 {formatInfo && (
                   <span className="h-6 sm:h-7 px-1.5 hidden sm:flex items-center justify-center whitespace-nowrap rounded-md text-[10px] font-semibold bg-[#222222] text-gray-300 border border-[#3a3a3a] shrink-0 font-mono">
-                    {formatInfo.format}
+                    {formatInfo.detectedFormat}
                   </span>
                 )}
                 <span className="text-[11px] sm:text-xs font-medium text-white truncate max-w-[120px] sm:max-w-[220px]">
