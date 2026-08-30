@@ -7,7 +7,7 @@ export interface SafeFetchResult<T = any> {
 
 /**
  * Safely fetches an API route and parses JSON without throwing native SyntaxErrors
- * on HTML error pages (e.g. 504 Gateway Timeout, 502 Bad Gateway, 404 HTML).
+ * on HTML error pages (e.g. 504 Gateway Timeout, 502 Bad Gateway, 404 HTML, or SPA fallback).
  */
 export async function safeFetchJson<T = any>(
   url: string,
@@ -37,22 +37,17 @@ export async function safeFetchJson<T = any>(
           ok: false,
           status: res.status,
           data: null,
-          error: "תגובת השרת לא הייתה בפורמט JSON תקין.",
+          error: "תגובת השרת אינה בפורמט JSON תקין.",
         };
       }
     }
 
-    // HTML response (e.g. 504 / 502 / 404 proxy page)
-    const isTimeout = res.status === 504 || res.status === 502;
-    const errorMsg = isTimeout
-      ? "שרת ה-AI חווה עומס זמני או תפוס. מנגנון הגיבוי המקומי מופעל."
-      : `שרת ה-API החזיר תגובה לא צפויה (סטטוס: ${res.status}).`;
-
+    // HTML response (e.g. 504 / 502 / 404 or Vite SPA fallback)
     return {
       ok: false,
       status: res.status,
       data: null,
-      error: errorMsg,
+      error: "שרת ה-AI אינו זמין כעת. מפעיל גיבוי מקומי אוטומטי.",
     };
   } catch (err: any) {
     if (err.name === "AbortError" || err.message?.includes("cancelled")) {

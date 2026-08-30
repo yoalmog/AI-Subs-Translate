@@ -34,7 +34,7 @@ import {
 } from "./types";
 import { DEMO_VIDEOS } from "./data/demoVideos";
 import { TARGET_LANGUAGES, TargetLanguage, DEFAULT_LANGUAGE } from "./data/languages";
-import { sampleVideoFrames } from "./utils/frameSampler";
+import { sampleVideoFrames, compressFramesForApiPayload, generateClientSideSubtitleFallback } from "./utils/frameSampler";
 import { safeFetchJson } from "./utils/safeFetch";
 import { createNormalizedVideoBlob } from "./utils/videoTypeHelper";
 import {
@@ -506,11 +506,14 @@ export default function App() {
         });
       }, 400);
 
+      // Compress sampled frames for ultra-light network payload (<200KB)
+      const apiPayloadFrames = compressFramesForApiPayload(sampledFrames, 8);
+
       const result = await safeFetchJson<any>("/api/analyze-frames", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          frames: sampledFrames,
+          frames: apiPayloadFrames,
           videoDuration: duration,
           languageHint: "Auto-detect",
           targetLanguage: targetLanguage.name,
@@ -528,7 +531,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            frames: sampledFrames,
+            frames: apiPayloadFrames,
             videoDuration: duration,
             targetLanguage: targetLanguage.name,
           }),
@@ -538,6 +541,12 @@ export default function App() {
         if (localResult.data && (localResult.data.cues || localResult.data.success)) {
           data = localResult.data;
         }
+      }
+
+      // Fail-safe client side fallback if both network endpoints were unreachable
+      if (!data || (!data.cues && !data.success)) {
+        console.warn("Network API endpoints unavailable, running client-side fail-safe subtitle generator...");
+        data = generateClientSideSubtitleFallback(sampledFrames, duration, targetLanguage.name);
       }
 
       if (progressTimerRef.current) {

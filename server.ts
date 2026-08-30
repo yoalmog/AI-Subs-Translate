@@ -158,6 +158,7 @@ function runLocalAIServerFrameAnalysis(
 
 // Dedicated Local AI Server Endpoint (100% offline, zero rate limits)
 app.post("/api/local-ai/analyze-frames", (req, res) => {
+  res.setHeader("Content-Type", "application/json");
   try {
     const { frames, videoDuration, targetLanguage = "Hebrew" } = req.body;
     const validFrames = Array.isArray(frames) ? frames : [];
@@ -171,6 +172,7 @@ app.post("/api/local-ai/analyze-frames", (req, res) => {
 
 // Analyze video frames for hardcoded subtitles & translate to target language (default Hebrew)
 app.post("/api/analyze-frames", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
   try {
     const { frames, videoDuration, languageHint, targetLanguage = "Hebrew", useLocalAI = false } = req.body;
 
