@@ -193,18 +193,30 @@ app.post("/api/analyze-frames", async (req, res) => {
       return res.json(localResult);
     }
 
-    // Try Gemini Cloud AI with 6-frame chunking & automatic Local AI Server fallback
+    // Sub-sample up to max 10 evenly spaced keyframes to prevent heavy payloads and cloud proxy timeouts
+    let selectedFrames = validFrames;
+    if (validFrames.length > 10) {
+      const step = (validFrames.length - 1) / 9;
+      selectedFrames = [];
+      for (let i = 0; i < 10; i++) {
+        const index = Math.round(i * step);
+        if (validFrames[index]) {
+          selectedFrames.push(validFrames[index]);
+        }
+      }
+    }
+
+    // Try Gemini Cloud AI with 5-frame chunking & automatic Local AI Server fallback
     let allCues: any[] = [];
     let cloudSuccess = false;
 
     try {
       const ai = getGeminiClient();
 
-      // Chunk frames into batches of max 6 frames to prevent payload & token limit errors
-      const CHUNK_SIZE = 6;
+      const CHUNK_SIZE = 5;
       const chunks: any[][] = [];
-      for (let i = 0; i < validFrames.length; i += CHUNK_SIZE) {
-        chunks.push(validFrames.slice(i, i + CHUNK_SIZE));
+      for (let i = 0; i < selectedFrames.length; i += CHUNK_SIZE) {
+        chunks.push(selectedFrames.slice(i, i + CHUNK_SIZE));
       }
 
       for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
@@ -244,7 +256,13 @@ TASK:
         }
 
         const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
-        const response = await generateContentWithResilience(
+        
+        // Timeout after 12 seconds per chunk call to avoid gateway timeout
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Gemini chunk request timeout")), 12000)
+        );
+
+        const geminiPromise = generateContentWithResilience(
           ai,
           candidateModels,
           (model) => ({
@@ -277,7 +295,9 @@ TASK:
           })
         );
 
-        let rawText = (response.text || "[]").trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
+        const response: any = await Promise.race([geminiPromise, timeoutPromise]);
+
+        let rawText = (response?.text || "[]").trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
         let chunkCues: any[] = [];
         try {
           chunkCues = JSON.parse(rawText);
@@ -291,7 +311,7 @@ TASK:
       }
       cloudSuccess = true;
     } catch (cloudErr: any) {
-      console.warn("Cloud Gemini API unavailable/busy, falling back to Local AI Server engine:", cloudErr?.message || cloudErr);
+      console.warn("Cloud Gemini API unavailable or timed out, falling back to Local AI Server engine:", cloudErr?.message || cloudErr);
     }
 
     // If Cloud API didn't complete or returned no cues, use Local AI Server engine seamlessly

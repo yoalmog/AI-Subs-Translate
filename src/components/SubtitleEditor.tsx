@@ -60,6 +60,7 @@ import { autoFormatAllCues, calculateCueCps, optimizeSubtitleCpsAndTiming } from
 import { GlossaryModal, GlossaryDictionary } from "./GlossaryModal";
 import { ExecutiveSummaryCard } from "./ExecutiveSummaryCard";
 import { autoDiarizeCuesClientSide, getSpeakerColor, syncSpeakerColors } from "../utils/speakerDiarization";
+import { safeFetchJson } from "../utils/safeFetch";
 
 interface SubtitleEditorProps {
   cues: SubtitleCue[];
@@ -139,13 +140,12 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
     if (cues.length === 0) return;
     setIsDiarizing(true);
     try {
-      const res = await fetch("/api/diarize-speakers", {
+      const { ok, data } = await safeFetchJson<any>("/api/diarize-speakers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cues }),
       });
-      const data = await res.json();
-      if (data.success && Array.isArray(data.diarizedCues)) {
+      if (ok && data?.success && Array.isArray(data.diarizedCues)) {
         if (onReplaceAllCues) {
           onReplaceAllCues(data.diarizedCues);
         } else {
@@ -156,7 +156,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
           text: `בוצע זיהוי דוברים (AI Diarization)! שוייכו ${data.speakersCount || 2} דוברים בצבעים שונים.`,
         });
       } else {
-        throw new Error(data.message || "נכשל");
+        throw new Error(data?.message || "נכשל");
       }
     } catch (err) {
       // Client-side diarization fallback

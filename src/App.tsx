@@ -35,6 +35,7 @@ import {
 import { DEMO_VIDEOS } from "./data/demoVideos";
 import { TARGET_LANGUAGES, TargetLanguage, DEFAULT_LANGUAGE } from "./data/languages";
 import { sampleVideoFrames } from "./utils/frameSampler";
+import { safeFetchJson } from "./utils/safeFetch";
 import { createNormalizedVideoBlob } from "./utils/videoTypeHelper";
 import {
   saveDraftToStorage,
@@ -505,7 +506,7 @@ export default function App() {
         });
       }, 400);
 
-      let response = await fetch("/api/analyze-frames", {
+      const result = await safeFetchJson<any>("/api/analyze-frames", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -518,24 +519,12 @@ export default function App() {
         signal: controller.signal,
       });
 
-      let responseText = "";
-      try {
-        responseText = await response.text();
-      } catch (readErr: any) {
-        console.warn("Error reading primary AI response, trying local AI server...");
-      }
-
-      let data: any = null;
-      try {
-        data = JSON.parse(responseText);
-      } catch (jsonErr) {
-        console.warn("Server returned non-JSON response from cloud AI:", responseText.slice(0, 150));
-      }
+      let data: any = result.data;
 
       // Seamless fallback to Local AI Server endpoint if cloud AI is busy or returned non-200
-      if (!response.ok || !data || data.error || !data.success) {
+      if (!result.ok || !data || data.error || !data.success) {
         console.log("Cloud AI endpoint unavailable or busy, invoking Local AI Server fallback...");
-        const localResponse = await fetch("/api/local-ai/analyze-frames", {
+        const localResult = await safeFetchJson<any>("/api/local-ai/analyze-frames", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -546,8 +535,8 @@ export default function App() {
           signal: controller.signal,
         });
 
-        if (localResponse.ok) {
-          data = await localResponse.json();
+        if (localResult.data && (localResult.data.cues || localResult.data.success)) {
+          data = localResult.data;
         }
       }
 
@@ -557,7 +546,7 @@ export default function App() {
       }
 
       if (!data || (!data.cues && !data.success)) {
-        throw new Error(data?.error || "שגיאה בתקשורת עם שרת ה-AI.");
+        throw new Error(data?.error || result.error || "שגיאה בתקשורת עם שרת ה-AI.");
       }
 
       const detectedCues: SubtitleCue[] = data.cues || [];

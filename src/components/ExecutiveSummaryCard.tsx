@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Sparkles, Copy, Check, FileText, RefreshCw, AlertCircle, ChevronDown, ChevronUp, Share2, BookOpen } from "lucide-react";
 import { SubtitleCue } from "../types";
+import { safeFetchJson } from "../utils/safeFetch";
 
 interface ExecutiveSummaryData {
   title: string;
@@ -34,7 +35,7 @@ export const ExecutiveSummaryCard: React.FC<ExecutiveSummaryCardProps> = ({
     setError(null);
 
     try {
-      const response = await fetch("/api/generate-summary", {
+      const { ok, data } = await safeFetchJson<any>("/api/generate-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -44,11 +45,10 @@ export const ExecutiveSummaryCard: React.FC<ExecutiveSummaryCardProps> = ({
         }),
       });
 
-      const data = await response.json();
-      if (data.success && data.summary) {
+      if (ok && data?.success && data.summary) {
         setSummary(data.summary);
       } else {
-        throw new Error(data.message || "לא ניתן להפיק תקציר");
+        throw new Error(data?.message || "לא ניתן להפיק תקציר");
       }
     } catch (err: any) {
       console.warn("AI Summary API error, using smart client summarizer fallback:", err);
