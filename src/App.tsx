@@ -56,6 +56,7 @@ import {
   Undo2,
   Redo2,
 } from "lucide-react";
+import { GlossaryDictionary } from "./components/GlossaryModal";
 
 const DEFAULT_STYLES: SubtitleStyleSettings = {
   fontSize: 26,
@@ -156,6 +157,7 @@ export default function App() {
   const [styles, setStyles] = useState<SubtitleStyleSettings>(DEFAULT_STYLES);
   const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>(DEFAULT_LANGUAGE);
   const [tonePreference, setTonePreference] = useState<TonePreference>("informal");
+  const [glossary, setGlossary] = useState<GlossaryDictionary>({});
   const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
   const [savedDraftAvailable, setSavedDraftAvailable] = useState<AutoSaveDraft | null>(null);
   const [projectBannerMessage, setProjectBannerMessage] = useState<{
@@ -503,7 +505,7 @@ export default function App() {
         });
       }, 400);
 
-      const response = await fetch("/api/analyze-frames", {
+      let response = await fetch("/api/analyze-frames", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -511,47 +513,51 @@ export default function App() {
           videoDuration: duration,
           languageHint: "Auto-detect",
           targetLanguage: targetLanguage.name,
+          glossary: glossary,
         }),
         signal: controller.signal,
       });
-
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
 
       let responseText = "";
       try {
         responseText = await response.text();
       } catch (readErr: any) {
-        throw new Error("שגיאה בקריאת התשובה משרת ה-AI.");
+        console.warn("Error reading primary AI response, trying local AI server...");
       }
 
       let data: any = null;
       try {
         data = JSON.parse(responseText);
       } catch (jsonErr) {
-        console.warn("Server returned non-JSON response:", responseText.slice(0, 150));
+        console.warn("Server returned non-JSON response from cloud AI:", responseText.slice(0, 150));
       }
 
-      if (!response.ok || !data || data.error) {
-        let errMsg = data?.error;
-        if (!errMsg) {
-          if (responseText && (responseText.trim().startsWith("<") || responseText.includes("<!DOCTYPE"))) {
-            errMsg = "שרת ה-AI חווה עומס רגעי. אנא לחץ 'נסה שוב'.";
-          } else if (response.status === 413) {
-            errMsg = "גודל הפריימים גדול מדי. אנא נסה לדגום פחות פריימים.";
-          } else if (response.status === 503 || response.status === 504) {
-            errMsg = "שרת ה-AI חווה עומס רגעי. לחץ 'נסה שוב'.";
-          } else if (response.status === 404) {
-            errMsg = "שירות ה-AI אינו זמין כרגע בשרת.";
-          } else if (response.status === 200) {
-            errMsg = "תשובת ה-AI לא עובדה כראוי. לחץ 'נסה שוב'.";
-          } else {
-            errMsg = `שגיאה בתקשורת עם שרת ה-AI (קוד ${response.status || "תגובה לא תקינה"}).`;
-          }
+      // Seamless fallback to Local AI Server endpoint if cloud AI is busy or returned non-200
+      if (!response.ok || !data || data.error || !data.success) {
+        console.log("Cloud AI endpoint unavailable or busy, invoking Local AI Server fallback...");
+        const localResponse = await fetch("/api/local-ai/analyze-frames", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            frames: sampledFrames,
+            videoDuration: duration,
+            targetLanguage: targetLanguage.name,
+          }),
+          signal: controller.signal,
+        });
+
+        if (localResponse.ok) {
+          data = await localResponse.json();
         }
-        throw new Error(errMsg);
+      }
+
+      if (progressTimerRef.current) {
+        clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
+
+      if (!data || (!data.cues && !data.success)) {
+        throw new Error(data?.error || "שגיאה בתקשורת עם שרת ה-AI.");
       }
 
       const detectedCues: SubtitleCue[] = data.cues || [];
@@ -627,6 +633,7 @@ export default function App() {
         context: `Subtitle cue at timestamp ${cue.startTime}s`,
         targetLanguage: langToUse,
         tone: tone || "informal",
+        glossary: glossary,
       }),
     });
 
@@ -992,6 +999,11 @@ export default function App() {
               activeCueId={activeCue?.id || null}
               currentTime={currentTime}
               videoDuration={videoDuration}
+              videoName={videoName}
+              onReplaceAllCues={(newCues) => {
+                pushToUndoHistory(cues);
+                setCues(newCues);
+              }}
               onSeekTo={(time) => {
                 playerRef.current?.seekTo(time);
               }}
@@ -1018,6 +1030,8 @@ export default function App() {
               savedDraftAvailable={savedDraftAvailable}
               onRestoreDraft={handleRestoreDraft}
               onClearSavedDraft={handleClearDraft}
+              glossary={glossary}
+              onUpdateGlossary={setGlossary}
             />
           ) : (
             <div className="lg:hidden">

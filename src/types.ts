@@ -7,6 +7,8 @@ export interface SubtitleCue {
   originalText: string;
   hebrewText: string;
   detectedLanguage?: string;
+  speaker?: string; // e.g. "דובר 1", "דובר 2"
+  speakerColor?: string; // hex color code for speaker identification
   position?: {
     bottomPercent?: number; // e.g. 8%
     heightPercent?: number; // e.g. 12%

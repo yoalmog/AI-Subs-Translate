@@ -17,8 +17,8 @@ export interface VideoFrameSource {
  */
 export function captureVideoFrame(
   video: HTMLVideoElement,
-  maxWidth: number = 480,
-  quality: number = 0.70
+  maxWidth: number = 400,
+  quality: number = 0.58
 ): string {
   try {
     const canvas = document.createElement("canvas");
@@ -48,8 +48,8 @@ export function captureVideoFrame(
 export function captureDemoFrame(
   demoId: string,
   time: number,
-  maxWidth: number = 480,
-  quality: number = 0.70
+  maxWidth: number = 400,
+  quality: number = 0.58
 ): string {
   const canvas = document.createElement("canvas");
   const width = maxWidth;

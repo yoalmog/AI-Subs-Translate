@@ -85,11 +85,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [serverDownloadUrl, setServerDownloadUrl] = useState<string | null>(null);
   const [autoFormatMessage, setAutoFormatMessage] = useState<string | null>(null);
 
-  // Preview Burn-in state (3-second sample)
+  // Preview Burn-in state (sample preview)
   const [isPreviewingSample, setIsPreviewingSample] = useState<boolean>(false);
   const [previewSampleProgress, setPreviewSampleProgress] = useState<number>(0);
   const [previewSampleBlobUrl, setPreviewSampleBlobUrl] = useState<string | null>(null);
   const [previewSampleStartTime, setPreviewSampleStartTime] = useState<number>(0);
+  const [previewLabel, setPreviewLabel] = useState<string>("5 השניות האחרונות");
 
   const [activeTab, setActiveTab] = useState<"video" | "subtitles">("video");
   const [copiedType, setCopiedType] = useState<string | null>(null);
@@ -115,9 +116,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const videoFileName = `${baseFileName}_hebrew_subtitles.webm`;
 
   const totalDuration = sourceHandle?.duration || videoElement?.duration || 10;
+  const last5SecStart = Math.max(0, totalDuration - 5);
 
-  // Handle Generating 3-Second Burn-in Sample Preview
-  const handleGeneratePreviewSample = async (customStartSec?: number) => {
+  // Handle Generating Burn-in Sample Preview (default 5 seconds)
+  const handleGeneratePreviewSample = async (
+    customStartSec?: number,
+    customDurationSec: number = 5
+  ) => {
     const src: ExportSource = sourceHandle || {
       type: "video",
       videoElement,
@@ -135,7 +140,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         cues,
         styles,
         startSec,
-        3,
+        customDurationSec,
         (prog) => {
           setPreviewSampleProgress(prog.percent);
         }
@@ -148,6 +153,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         } catch (_) {}
       }
       setPreviewSampleBlobUrl(url);
+
+      if (Math.abs(startSec - last5SecStart) < 0.5) {
+        setPreviewLabel("5 השניות האחרונות בסרטון");
+      } else {
+        setPreviewLabel(`${formatTimeDisplay(startSec)} - ${formatTimeDisplay(startSec + customDurationSec)}`);
+      }
     } catch (err: any) {
       console.error("Preview sample error:", err);
     } finally {
@@ -498,77 +509,100 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               {(!exportProgress || exportProgress.status === "error") && !renderedBlobUrl && (
                 <div className="flex flex-col gap-3 pt-1 border-t border-[#222222]">
                   {/* Preview Burn-in Box */}
-                  <div className="p-3 bg-[#121212] rounded-lg border border-[#262626] flex flex-col gap-2.5">
+                  <div className="p-3 bg-[#121212] rounded-lg border border-amber-500/30 flex flex-col gap-2.5">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
-                        <Eye className="w-4 h-4" />
-                        <span>תצוגה מקדימה מהירה (דוגמית 3 שניות)</span>
+                        <Eye className="w-4 h-4 text-amber-400" />
+                        <span>תצוגה מקדימה (Burned-in Subtitles)</span>
                       </div>
-                      <span className="text-[10px] text-gray-400">
-                        ללא המתנה לייצוא מלא
+                      <span className="text-[10px] text-amber-200/80 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-500/30">
+                        אימות עיצוב ומיקום
                       </span>
                     </div>
 
-                    <p className="text-[11px] text-gray-400 leading-normal">
-                      מייצר קליפ וידאו קצר באורך 3 שניות כדי לוודא שעיצוב הכתוביות, הגופן ופס הכיסוי מושלמים לפני הרינדור המלא.
+                    <p className="text-[11px] text-gray-300 leading-normal">
+                      צור תצוגה מקדימה קצרה של 5 השניות האחרונות בסרטון לאחר הטמעת הכתוביות ופס הכיסוי, כדי לוודא שהעיצוב, הגופן והמיקום תקינים.
                     </p>
 
-                    {/* Choose sample start time */}
-                    <div className="flex items-center gap-2 text-xs text-gray-300">
-                      <span className="text-[11px] text-gray-400">התחל משנייה:</span>
+                    {/* Primary Quick Action: Last 5 Seconds Preview */}
+                    <button
+                      id="preview-last-5s-btn"
+                      onClick={() => handleGeneratePreviewSample(last5SecStart, 5)}
+                      disabled={isPreviewingSample}
+                      className="w-full py-2 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold text-xs rounded-lg transition flex items-center justify-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+                      title="הפק דוגמית וידאו של 5 השניות האחרונות בסרטון עם הכתוביות המוטמעות"
+                    >
+                      {isPreviewingSample ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span>מפיק דוגמית... {previewSampleProgress}%</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current text-white" />
+                          <span>הצג תצוגה מקדימה: 5 השניות האחרונות של הסרטון (5s)</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Secondary option: Choose custom start timestamp */}
+                    <div className="flex items-center gap-2 text-xs text-gray-400 pt-1 border-t border-[#222222]">
+                      <span className="text-[11px] shrink-0">או בחר נקודת התחלה אחרת:</span>
                       <select
                         value={previewSampleStartTime}
                         onChange={(e) => setPreviewSampleStartTime(Number(e.target.value))}
-                        className="bg-[#1a1a1a] border border-[#333333] rounded px-2 py-1 text-xs text-white focus:border-blue-500 focus:outline-none"
+                        className="bg-[#1a1a1a] border border-[#333333] rounded px-2 py-1 text-xs text-white focus:border-amber-500 focus:outline-none flex-1 truncate"
                       >
-                        <option value={0}>0:00 (התחלת הסרטון)</option>
-                        {cues.slice(0, 10).map((cue, idx) => (
+                        <option value={last5SecStart}>
+                          5 השניות האחרונות ({formatTimeDisplay(last5SecStart)} - {formatTimeDisplay(totalDuration)})
+                        </option>
+                        <option value={0}>0:00 (תחילת הסרטון)</option>
+                        {cues.slice(0, 10).map((cue) => (
                           <option key={cue.id} value={Math.floor(cue.startTime)}>
-                            {formatTimeDisplay(cue.startTime)} - {cue.hebrewText.substring(0, 20) || cue.originalText.substring(0, 20)}...
+                            {formatTimeDisplay(cue.startTime)} - {cue.hebrewText.substring(0, 25) || cue.originalText.substring(0, 25)}...
                           </option>
                         ))}
                       </select>
 
                       <button
-                        onClick={() => handleGeneratePreviewSample()}
+                        onClick={() => handleGeneratePreviewSample(previewSampleStartTime, 5)}
                         disabled={isPreviewingSample}
-                        className="mr-auto px-3 py-1 bg-amber-600/90 hover:bg-amber-500 text-white font-semibold text-xs rounded transition flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
+                        className="px-2.5 py-1 bg-[#222222] hover:bg-[#2e2e2e] text-gray-200 hover:text-white font-semibold text-xs rounded border border-[#333333] transition shrink-0 disabled:opacity-50 cursor-pointer"
                       >
-                        {isPreviewingSample ? (
-                          <>
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>מרנדר {previewSampleProgress}%</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-3 h-3 fill-current" />
-                            <span>הפק דוגמית (3s)</span>
-                          </>
-                        )}
+                        הפק
                       </button>
                     </div>
 
-                    {/* Preview Sample Player */}
+                    {/* Preview Sample Video Player */}
                     {previewSampleBlobUrl && (
-                      <div className="mt-1 flex flex-col gap-2 p-2 bg-black/60 rounded-lg border border-amber-500/30">
-                        <div className="flex items-center justify-between text-[11px] text-amber-300 font-medium">
-                          <span>דוגמית בת 3 שניות מוכנה:</span>
+                      <div className="mt-1 flex flex-col gap-2 p-2.5 bg-black/80 rounded-lg border border-amber-500/40 animate-in fade-in">
+                        <div className="flex items-center justify-between text-[11px] text-amber-300 font-bold">
+                          <span className="flex items-center gap-1.5">
+                            <Eye className="w-3.5 h-3.5 text-amber-400" />
+                            <span>תצוגה מקדימה מוכנה ({previewLabel}):</span>
+                          </span>
                           <button
-                            onClick={() => handleGeneratePreviewSample()}
-                            className="text-gray-400 hover:text-white flex items-center gap-1 text-[10px]"
+                            onClick={() => handleGeneratePreviewSample(last5SecStart, 5)}
+                            className="text-gray-400 hover:text-white flex items-center gap-1 text-[10px] cursor-pointer"
+                            title="רענן תצוגה מקדימה"
                           >
                             <RotateCcw className="w-3 h-3" />
-                            <span>הפק מחדש</span>
+                            <span>רענן</span>
                           </button>
                         </div>
+
                         <video
                           src={previewSampleBlobUrl}
                           controls
                           autoPlay
                           loop
                           playsInline
-                          className="w-full max-h-44 object-contain rounded bg-black"
+                          className="w-full max-h-48 object-contain rounded bg-black border border-[#222222]"
                         />
+
+                        <p className="text-[10px] text-gray-400 text-center">
+                          ✓ בדוק שהגופן, הצבע ופס הכיסוי מוצגים כראוי. הכל תקין? לחץ למטה להתחלת ייצוא מלא.
+                        </p>
                       </div>
                     )}
                   </div>

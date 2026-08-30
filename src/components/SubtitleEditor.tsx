@@ -33,6 +33,9 @@ import {
   Undo2,
   Redo2,
   Filter,
+  BookOpen,
+  Zap,
+  Users,
 } from "lucide-react";
 import { SubtitleCue, TonePreference } from "../types";
 import { formatTimeDisplay } from "../utils/timeFormat";
@@ -53,13 +56,18 @@ import { SpellcheckSubtitleInput } from "./SpellcheckSubtitleInput";
 import { DurationDistributionChart } from "./DurationDistributionChart";
 import { InteractiveTimelineStrip } from "./InteractiveTimelineStrip";
 import { SyncConflictsModal } from "./SyncConflictsModal";
-import { autoFormatAllCues } from "../utils/subtitleFormatter";
+import { autoFormatAllCues, calculateCueCps, optimizeSubtitleCpsAndTiming } from "../utils/subtitleFormatter";
+import { GlossaryModal, GlossaryDictionary } from "./GlossaryModal";
+import { ExecutiveSummaryCard } from "./ExecutiveSummaryCard";
+import { autoDiarizeCuesClientSide, getSpeakerColor, syncSpeakerColors } from "../utils/speakerDiarization";
 
 interface SubtitleEditorProps {
   cues: SubtitleCue[];
   activeCueId: string | null;
   currentTime: number;
   videoDuration?: number;
+  videoName?: string;
+  onReplaceAllCues?: (newCues: SubtitleCue[]) => void;
   onUpdateCue: (updatedCue: SubtitleCue) => void;
   onDeleteCue: (cueId: string) => void;
   onAddCue: (newCue: Partial<SubtitleCue>) => void;
@@ -84,6 +92,8 @@ interface SubtitleEditorProps {
   savedDraftAvailable?: AutoSaveDraft | null;
   onRestoreDraft?: () => void;
   onClearSavedDraft?: () => void;
+  glossary?: GlossaryDictionary;
+  onUpdateGlossary?: (glossary: GlossaryDictionary) => void;
 }
 
 export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
@@ -91,6 +101,8 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
   activeCueId,
   currentTime,
   videoDuration = 10,
+  videoName,
+  onReplaceAllCues,
   onUpdateCue,
   onDeleteCue,
   onAddCue,
@@ -115,9 +127,54 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
   savedDraftAvailable,
   onRestoreDraft,
   onClearSavedDraft,
+  glossary = {},
+  onUpdateGlossary,
 }) => {
   const [internalLanguage, setInternalLanguage] = useState<TargetLanguage>(DEFAULT_LANGUAGE);
   const selectedLang = externalSelectedLanguage || internalLanguage;
+
+  const [isDiarizing, setIsDiarizing] = useState<boolean>(false);
+
+  const handleDiarizeSpeakers = async () => {
+    if (cues.length === 0) return;
+    setIsDiarizing(true);
+    try {
+      const res = await fetch("/api/diarize-speakers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cues }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.diarizedCues)) {
+        if (onReplaceAllCues) {
+          onReplaceAllCues(data.diarizedCues);
+        } else {
+          onImportSrt(data.diarizedCues);
+        }
+        setFeedbackMessage({
+          type: "success",
+          text: `בוצע זיהוי דוברים (AI Diarization)! שוייכו ${data.speakersCount || 2} דוברים בצבעים שונים.`,
+        });
+      } else {
+        throw new Error(data.message || "נכשל");
+      }
+    } catch (err) {
+      // Client-side diarization fallback
+      const fallback = autoDiarizeCuesClientSide(cues);
+      if (onReplaceAllCues) {
+        onReplaceAllCues(fallback.diarizedCues);
+      } else {
+        onImportSrt(fallback.diarizedCues);
+      }
+      setFeedbackMessage({
+        type: "info",
+        text: `בוצע זיהוי דוברים מקומי: שוייכו ${fallback.speakersFound.length || 2} דוברים בצבעים שונים.`,
+      });
+    } finally {
+      setIsDiarizing(false);
+      setTimeout(() => setFeedbackMessage(null), 4000);
+    }
+  };
 
   // Tone Preference State: 'informal' (default), 'formal', 'literal'
   const [internalTonePreference, setInternalTonePreference] = useState<TonePreference>("informal");
@@ -146,6 +203,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
   const [batchShiftModalOpen, setBatchShiftModalOpen] = useState<boolean>(false);
   const [syncConflictsModalOpen, setSyncConflictsModalOpen] = useState<boolean>(false);
   const [validationModalOpen, setValidationModalOpen] = useState<boolean>(false);
+  const [glossaryModalOpen, setGlossaryModalOpen] = useState<boolean>(false);
   const [validationResult, setValidationResult] = useState<SrtValidationResult | null>(null);
   const [uploadFileName, setUploadFileName] = useState<string>("");
 
@@ -163,6 +221,35 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
     videoDuration || 10,
     cues.length > 0 ? Math.max(...cues.map((c) => c.endTime)) + 1 : 10
   );
+
+  // Count cues with high CPS (> 17)
+  const highCpsCount = useMemo(() => {
+    return cues.filter((cue) => calculateCueCps(cue) > 17).length;
+  }, [cues]);
+
+  // Handle Auto-Optimize CPS & Subtitle Durations
+  const handleAutoOptimizeCps = () => {
+    if (cues.length === 0) return;
+    const { optimizedCues, modifiedCount, splitCount } = optimizeSubtitleCpsAndTiming(
+      cues,
+      15,
+      effectiveDuration
+    );
+
+    if (modifiedCount === 0 && splitCount === 0) {
+      setFeedbackMessage({
+        type: "info",
+        text: "כל הכתוביות כבר בקצב קריאה ואיזון תזמונים אופטימלי!",
+      });
+      return;
+    }
+
+    onImportSrt(optimizedCues);
+    setFeedbackMessage({
+      type: "success",
+      text: `בוצעה אופטימיזציה אוטומטית: עודכנו ${modifiedCount} כתוביות, ופצלו ${splitCount} כתוביות מהירות לקריאה נוחה!`,
+    });
+  };
 
   // Real-time Timing Overlap Detection Map
   // Map of cue.id -> list of overlapping cue indexes/IDs
@@ -228,7 +315,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
     }
   }, [activeCueId, autoScroll]);
 
-  const [filterType, setFilterType] = useState<"all" | "short" | "long" | "overlapping">("all");
+  const [filterType, setFilterType] = useState<"all" | "short" | "long" | "overlapping" | "high-cps">("all");
 
   // Filtered cues based on search term & category filter
   const filteredCues = useMemo(() => {
@@ -237,6 +324,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
       if (filterType === "short" && cueDuration >= 1.2) return false;
       if (filterType === "long" && cueDuration <= 5.5) return false;
       if (filterType === "overlapping" && !overlappingCuesMap.has(cue.id)) return false;
+      if (filterType === "high-cps" && calculateCueCps(cue) <= 17) return false;
 
       if (!searchTerm.trim()) return true;
       const term = searchTerm.toLowerCase().trim();
@@ -1059,6 +1147,55 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                 )}
               </button>
 
+              {/* Auto-Optimize CPS & Subtitle Durations Button */}
+              <button
+                id="auto-optimize-cps-btn"
+                onClick={handleAutoOptimizeCps}
+                disabled={cues.length === 0}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-amber-950/80 via-orange-950/80 to-amber-900/80 hover:from-amber-900 hover:to-orange-900 text-amber-200 hover:text-white border border-amber-500/50 hover:border-amber-400 rounded-md text-xs font-bold transition disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
+                title="אופטימיזציה אוטומטית: תיקון כתוביות עם קצב קריאה גבוה (CPS), הארכת משך לרווחים פנויים ופיצול כתוביות מהירות"
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                <span>אופטימיזציה אוטומטית</span>
+                {highCpsCount > 0 && (
+                  <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono animate-pulse">
+                    {highCpsCount} מהירות
+                  </span>
+                )}
+              </button>
+
+              {/* Speaker Diarization Button */}
+              <button
+                id="diarize-speakers-btn"
+                onClick={handleDiarizeSpeakers}
+                disabled={cues.length === 0 || isDiarizing}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-purple-950 via-pink-950 to-purple-900 hover:from-purple-900 hover:to-pink-900 text-pink-200 hover:text-white border border-pink-500/40 hover:border-pink-400 rounded-md text-xs font-bold transition disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
+                title="זיהוי דוברים (Speaker Diarization): זיהוי והפרדת הדוברים בסרטון ושיוך צבעים ייחודיים לכל דובר"
+              >
+                {isDiarizing ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-pink-400" />
+                ) : (
+                  <Users className="w-3.5 h-3.5 text-pink-400" />
+                )}
+                <span>זיהוי דוברים (AI)</span>
+              </button>
+
+              {/* Glossary / Terminology Dictionary Button */}
+              <button
+                id="glossary-modal-btn"
+                onClick={() => setGlossaryModalOpen(true)}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-[#1c1c1c] hover:bg-[#282828] text-purple-300 hover:text-purple-200 border border-purple-500/30 hover:border-purple-500/50 rounded-md text-xs font-medium transition cursor-pointer"
+                title="ניהול מילון מונחים (Glossary JSON) לתרגום מדויק של מונחים מקצועיים"
+              >
+                <BookOpen className="w-3.5 h-3.5 text-purple-400" />
+                <span>מילון מונחים</span>
+                {Object.keys(glossary).length > 0 && (
+                  <span className="bg-purple-950 text-purple-300 text-[10px] px-1.5 py-0.2 rounded-full border border-purple-500/40 font-mono">
+                    {Object.keys(glossary).length}
+                  </span>
+                )}
+              </button>
+
               {/* Clean OCR Artifacts */}
               <button
                 onClick={handleBulkCleanOcr}
@@ -1082,6 +1219,15 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
               </button>
             </div>
           </div>
+
+          {/* AI Executive Summary Card Component */}
+          {cues.length > 0 && (
+            <ExecutiveSummaryCard
+              cues={cues}
+              videoName={videoName}
+              videoDuration={videoDuration}
+            />
+          )}
 
           {/* Dedicated Subtitle Search & Filter Bar */}
           <div className="bg-[#0f0f0f] border border-[#262626] rounded-xl p-2.5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2 shadow-inner">
@@ -1165,6 +1311,22 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                 >
                   <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
                   <span>חפיפות ({totalOverlapCount})</span>
+                </button>
+              )}
+
+              {/* High CPS Filter */}
+              {highCpsCount > 0 && (
+                <button
+                  onClick={() => setFilterType(filterType === "high-cps" ? "all" : "high-cps")}
+                  className={`px-2.5 py-1 rounded-md text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
+                    filterType === "high-cps"
+                      ? "bg-amber-600/40 text-amber-200 border border-amber-500/70"
+                      : "bg-amber-950/50 text-amber-300 hover:text-amber-200 border border-amber-800/60"
+                  }`}
+                  title="הצג כתוביות עם קצב קריאה גבוה מאוד (>17 תווים לשנייה)"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                  <span>מהירות ({highCpsCount})</span>
                 </button>
               )}
 
@@ -1349,10 +1511,13 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
               ? sortedChronologicalCues[cueOrderIndex + 1]
               : null;
 
+            const speakerColor = cue.speakerColor || (cue.speaker ? getSpeakerColor(cue.speaker) : undefined);
+
             return (
               <div
                 key={cue.id}
                 ref={isActive ? activeItemRef : null}
+                style={speakerColor ? { borderRight: `4px solid ${speakerColor}` } : undefined}
                 className={`group rounded-lg border p-3 transition-all duration-200 relative ${
                   isOverlapping
                     ? "bg-[#181113] border-rose-600 shadow-md shadow-rose-950/50 ring-2 ring-rose-500/70"
@@ -1379,7 +1544,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                   </div>
                 )}
 
-                {/* Top Row: Selection Checkbox, Cue Number, Timestamps, Visual Duration Indicator & Action Buttons */}
+                {/* Top Row: Selection Checkbox, Cue Number, Timestamps, Speaker Tag, Visual Duration Indicator & Action Buttons */}
                 <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
                   <div className="flex items-center flex-wrap gap-2">
                     {/* Selection Checkbox */}
@@ -1434,8 +1599,64 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                       />
                     </div>
 
+                    {/* Speaker Tag & Color Picker Indicator */}
+                    <div
+                      className="flex items-center gap-1.5 bg-[#0d0d0d] border border-[#2b2b2b] px-2 py-0.5 rounded text-[11px] transition hover:border-[#444]"
+                      title="שם הדובר וצבע הבדלה ויזואלי"
+                    >
+                      <span
+                        className="w-2.5 h-2.5 rounded-full inline-block shrink-0 shadow-xs"
+                        style={{ backgroundColor: speakerColor || "#3b82f6" }}
+                      />
+                      <span className="text-gray-400 font-bold text-[10px]">דובר:</span>
+                      <input
+                        type="text"
+                        value={cue.speaker || "דובר 1"}
+                        onChange={(e) =>
+                          onUpdateCue({
+                            ...cue,
+                            speaker: e.target.value,
+                            speakerColor: cue.speakerColor || getSpeakerColor(e.target.value),
+                            isEdited: true,
+                          })
+                        }
+                        className="w-16 sm:w-20 bg-transparent text-gray-200 font-bold focus:outline-none focus:text-white border-b border-transparent focus:border-pink-500 text-[11px]"
+                        placeholder="שם דובר..."
+                      />
+                    </div>
+
                     {/* Visual Duration Health Badge & Mini Timeline Gauge */}
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* CPS Reading Speed Badge */}
+                      {(() => {
+                        const cueCps = calculateCueCps(cue);
+                        const isHighCps = cueCps > 20;
+                        const isMediumCps = cueCps > 15 && cueCps <= 20;
+
+                        return (
+                          <span
+                            className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded flex items-center gap-1 border transition ${
+                              isHighCps
+                                ? "bg-rose-950/80 border-rose-500/80 text-rose-200 animate-pulse"
+                                : isMediumCps
+                                ? "bg-amber-950/70 border-amber-500/40 text-amber-300"
+                                : "bg-emerald-950/70 border-emerald-500/40 text-emerald-300"
+                            }`}
+                            title={
+                              isHighCps
+                                ? `קצב קריאה גבוה מאוד (${cueCps} תווים לשנייה) - מהיר מדי לקריאה! לחץ על 'אופטימיזציה אוטומטית' לתיקון.`
+                                : isMediumCps
+                                ? `קצב קריאה מהיר (${cueCps} תווים לשנייה)`
+                                : `קצב קריאה תקין ונוח (${cueCps} תווים לשנייה)`
+                            }
+                          >
+                            <Zap className={`w-2.5 h-2.5 ${isHighCps ? "text-rose-400" : isMediumCps ? "text-amber-400" : "text-emerald-400"}`} />
+                            <span>{cueCps} CPS</span>
+                            {isHighCps && <span className="text-[9px] bg-rose-900/80 px-1 rounded">גבוה!</span>}
+                          </span>
+                        );
+                      })()}
+
                       {/* Health Pill */}
                       <span
                         className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded flex items-center gap-1 border transition ${
@@ -1662,6 +1883,18 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         validationResult={validationResult}
         fileName={uploadFileName}
         onConfirmImport={handleConfirmImport}
+      />
+
+      {/* Glossary Dictionary JSON Modal */}
+      <GlossaryModal
+        isOpen={glossaryModalOpen}
+        onClose={() => setGlossaryModalOpen(false)}
+        glossary={glossary}
+        onUpdateGlossary={(updated) => {
+          if (onUpdateGlossary) {
+            onUpdateGlossary(updated);
+          }
+        }}
       />
     </div>
   );
