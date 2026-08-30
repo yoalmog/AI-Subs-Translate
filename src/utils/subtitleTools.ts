@@ -361,34 +361,142 @@ export function validateSrtFile(rawContent: string): SrtValidationResult {
 }
 
 /**
+ * Options for resolving timing sync conflicts and adjusting gaps between adjacent cues.
+ */
+export interface ConflictResolutionOptions {
+  minGapSeconds: number; // e.g. 0, 0.05, 0.1, 0.15, 0.2
+  strategy: "trim-preceding" | "push-succeeding" | "smart-balance";
+  minAllowedDuration?: number; // e.g. 0.35s
+  maxVideoDuration?: number;
+}
+
+export interface ConflictResolutionResult {
+  resolvedCues: SubtitleCue[];
+  conflictsResolvedCount: number;
+  gapAdjustmentsCount: number;
+  details: string[];
+}
+
+/**
+ * Automatically adjusts timing gaps between adjacent cues to ensure perfect continuity without overlapping,
+ * based on user-defined minimum gap settings and resolution strategies.
+ */
+export function resolveAllSyncConflicts(
+  cues: SubtitleCue[],
+  options: ConflictResolutionOptions
+): ConflictResolutionResult {
+  if (!cues || cues.length <= 1) {
+    return {
+      resolvedCues: cues ? [...cues] : [],
+      conflictsResolvedCount: 0,
+      gapAdjustmentsCount: 0,
+      details: ["אין מספיק כתוביות לבדיקת קונפליקטים"],
+    };
+  }
+
+  const minGap = Math.max(0, options.minGapSeconds ?? 0.05);
+  const strategy = options.strategy || "smart-balance";
+  const minDuration = options.minAllowedDuration ?? 0.35;
+
+  // Preserve original map order
+  const sortedWithIndex = cues.map((cue, originalIndex) => ({
+    cue: { ...cue },
+    originalIndex,
+  })).sort((a, b) => a.cue.startTime - b.cue.startTime);
+
+  let conflictsResolvedCount = 0;
+  let gapAdjustmentsCount = 0;
+  const details: string[] = [];
+
+  for (let i = 1; i < sortedWithIndex.length; i++) {
+    const prev = sortedWithIndex[i - 1].cue;
+    const curr = sortedWithIndex[i].cue;
+
+    const currentGap = curr.startTime - prev.endTime;
+    const isOverlap = curr.startTime < prev.endTime - 0.002;
+    const isUnderMinGap = currentGap < minGap - 0.002;
+
+    if (isOverlap || isUnderMinGap) {
+      if (isOverlap) {
+        conflictsResolvedCount++;
+      } else {
+        gapAdjustmentsCount++;
+      }
+
+      const prevOriginalEnd = prev.endTime;
+      const currOriginalStart = curr.startTime;
+      const currDuration = Math.max(minDuration, curr.endTime - curr.startTime);
+
+      if (strategy === "trim-preceding") {
+        // Trim preceding cue end time to allow minGap before curr.startTime
+        const targetEnd = curr.startTime - minGap;
+        if (targetEnd >= prev.startTime + minDuration) {
+          prev.endTime = Number(targetEnd.toFixed(3));
+          prev.isEdited = true;
+        } else {
+          // Preceding would become too short: cap prev at minDuration and push curr
+          prev.endTime = Number((prev.startTime + minDuration).toFixed(3));
+          prev.isEdited = true;
+          curr.startTime = Number((prev.endTime + minGap).toFixed(3));
+          curr.endTime = Number((curr.startTime + currDuration).toFixed(3));
+          curr.isEdited = true;
+        }
+      } else if (strategy === "push-succeeding") {
+        // Push succeeding cue start time forward to prev.endTime + minGap
+        curr.startTime = Number((prev.endTime + minGap).toFixed(3));
+        curr.endTime = Number((curr.startTime + currDuration).toFixed(3));
+        curr.isEdited = true;
+      } else {
+        // smart-balance: Distribute the overlap/gap deficit evenly
+        const requiredStart = prev.endTime + minGap;
+        const deficit = requiredStart - curr.startTime;
+
+        // Split deficit: half from prev.endTime, half pushed to curr.startTime
+        const halfDeficit = deficit / 2;
+        const potentialPrevEnd = prev.endTime - halfDeficit;
+
+        if (potentialPrevEnd >= prev.startTime + minDuration) {
+          prev.endTime = Number(potentialPrevEnd.toFixed(3));
+          prev.isEdited = true;
+          curr.startTime = Number((prev.endTime + minGap).toFixed(3));
+          curr.endTime = Number((curr.startTime + currDuration).toFixed(3));
+          curr.isEdited = true;
+        } else {
+          // Keep prev at minDuration and push curr by remaining amount
+          prev.endTime = Number((prev.startTime + minDuration).toFixed(3));
+          prev.isEdited = true;
+          curr.startTime = Number((prev.endTime + minGap).toFixed(3));
+          curr.endTime = Number((curr.startTime + currDuration).toFixed(3));
+          curr.isEdited = true;
+        }
+      }
+
+      details.push(
+        `כתוביות #${sortedWithIndex[i - 1].originalIndex + 1} ו-#${sortedWithIndex[i].originalIndex + 1}: תוקנה חפיפה מ-${prevOriginalEnd.toFixed(2)}s / ${currOriginalStart.toFixed(2)}s לרווח של ${(curr.startTime - prev.endTime).toFixed(2)}s`
+      );
+    }
+  }
+
+  // Restore original ordering if desired, or return sorted
+  // Generally, sorted by start time is the most accurate for subtitle workflows
+  const resolvedCues = sortedWithIndex.map((item) => item.cue);
+
+  return {
+    resolvedCues,
+    conflictsResolvedCount,
+    gapAdjustmentsCount,
+    details,
+  };
+}
+
+/**
  * Automatically adjusts overlapping subtitle timings to maintain a clean sequence with no overlaps.
  */
 export function autoFixOverlappingCues(cues: SubtitleCue[], bufferSeconds: number = 0.05): SubtitleCue[] {
-  if (cues.length <= 1) return [...cues];
-
-  const sorted = [...cues].sort((a, b) => a.startTime - b.startTime);
-  const fixed: SubtitleCue[] = [];
-
-  for (let i = 0; i < sorted.length; i++) {
-    const cue = { ...sorted[i] };
-    if (i > 0) {
-      const prev = fixed[i - 1];
-      // If current cue starts before prev ended
-      if (cue.startTime < prev.endTime) {
-        // Adjust prev endTime to end just before current cue starts
-        if (prev.startTime + 0.3 < cue.startTime) {
-          prev.endTime = Math.max(prev.startTime + 0.2, cue.startTime - bufferSeconds);
-        } else {
-          // If prev cue is too tight, shift current cue startTime
-          cue.startTime = prev.endTime + bufferSeconds;
-          if (cue.endTime <= cue.startTime) {
-            cue.endTime = cue.startTime + 1.2;
-          }
-        }
-      }
-    }
-    fixed.push(cue);
-  }
-
-  return fixed;
+  const result = resolveAllSyncConflicts(cues, {
+    minGapSeconds: bufferSeconds,
+    strategy: "smart-balance",
+  });
+  return result.resolvedCues;
 }
+

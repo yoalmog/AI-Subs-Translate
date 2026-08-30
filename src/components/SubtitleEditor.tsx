@@ -41,6 +41,8 @@ import {
   mergeShortOrOverlappingCues,
   validateSrtFile,
   SrtValidationResult,
+  resolveAllSyncConflicts,
+  ConflictResolutionResult,
 } from "../utils/subtitleTools";
 import { TARGET_LANGUAGES, TargetLanguage, DEFAULT_LANGUAGE } from "../data/languages";
 import { AutoSaveDraft } from "../utils/autoSave";
@@ -49,6 +51,8 @@ import { FindAndReplaceModal } from "./FindAndReplaceModal";
 import { BatchTimeShiftModal, BulkShiftOptions } from "./BatchTimeShiftModal";
 import { SpellcheckSubtitleInput } from "./SpellcheckSubtitleInput";
 import { DurationDistributionChart } from "./DurationDistributionChart";
+import { InteractiveTimelineStrip } from "./InteractiveTimelineStrip";
+import { SyncConflictsModal } from "./SyncConflictsModal";
 import { autoFormatAllCues } from "../utils/subtitleFormatter";
 
 interface SubtitleEditorProps {
@@ -140,6 +144,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
   // Modals state
   const [findReplaceModalOpen, setFindReplaceModalOpen] = useState<boolean>(false);
   const [batchShiftModalOpen, setBatchShiftModalOpen] = useState<boolean>(false);
+  const [syncConflictsModalOpen, setSyncConflictsModalOpen] = useState<boolean>(false);
   const [validationModalOpen, setValidationModalOpen] = useState<boolean>(false);
   const [validationResult, setValidationResult] = useState<SrtValidationResult | null>(null);
   const [uploadFileName, setUploadFileName] = useState<string>("");
@@ -290,10 +295,18 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         }),
       });
 
+      let responseText = "";
+      try {
+        responseText = await response.text();
+      } catch (readErr) {
+        throw new Error("שגיאה בקריאת התשובה מהשרת.");
+      }
+
       let data: any = null;
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        data = await response.json().catch(() => null);
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        console.warn("Non-JSON batch translation response:", responseText.slice(0, 150));
       }
 
       if (!response.ok || !data) {
@@ -382,6 +395,19 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         text: "לא נמצאו כתוביות קצרות מדי או חופפות לאיחוד.",
       });
     }
+  };
+
+  // Resolve All Sync Conflicts and Timing Gaps
+  const handleApplySyncConflicts = (
+    resolvedCues: SubtitleCue[],
+    result: ConflictResolutionResult
+  ) => {
+    onImportSrt(resolvedCues);
+    const totalCount = result.conflictsResolvedCount + result.gapAdjustmentsCount;
+    setFeedbackMessage({
+      type: "success",
+      text: `נפתרו בהצלחה ${result.conflictsResolvedCount} חפיפות זמנים והותאמו ${result.gapAdjustmentsCount} מרווחי כתוביות (סה"כ ${totalCount} התאמות סנכרון)!`,
+    });
   };
 
   // Auto-Format all cues (regex cleanup pass)
@@ -1016,6 +1042,23 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                 <span>עיצוב אוטומטי</span>
               </button>
 
+              {/* Resolve All Sync Conflicts Tool */}
+              <button
+                id="resolve-sync-conflicts-btn"
+                onClick={() => setSyncConflictsModalOpen(true)}
+                disabled={cues.length <= 1}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-blue-950 via-indigo-950 to-blue-900 hover:from-blue-900 hover:to-indigo-900 text-blue-200 hover:text-white border border-blue-500/50 hover:border-blue-400 rounded-md text-xs font-bold transition disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
+                title="פתרון אוטומטי של כל קונפליקטי הזמנים, החפיפות ומרווחי המעבר"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                <span>פתור קונפליקטים וסנכרון רווחים</span>
+                {totalOverlapCount > 0 && (
+                  <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono animate-pulse">
+                    {totalOverlapCount} חפיפות
+                  </span>
+                )}
+              </button>
+
               {/* Clean OCR Artifacts */}
               <button
                 onClick={handleBulkCleanOcr}
@@ -1135,106 +1178,20 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
           </div>
         </div>
 
-        {/* Global Interactive Timeline Bar (Overview across Video Duration) */}
+        {/* Visual Interactive Timeline Strip with Edge Drag & Drop Duration Adjustments */}
         {cues.length > 0 && (
-          <div className="pt-2 border-t border-[#1f1f1f]">
-            <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
-              <div className="flex items-center gap-1.5 font-semibold">
-                <Layers className="w-3 h-3 text-blue-400" />
-                <span>ציר זמן כתוביות כולל ({formatTimeDisplay(effectiveDuration)})</span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[9px] flex-wrap">
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span> תקין (1.2-5.5s)
-                </span>
-                <span className="flex items-center gap-1 text-amber-400">
-                  <span className="w-2 h-2 rounded-full bg-amber-500 inline-block"></span> קצר (&lt;1.2s)
-                </span>
-                <span className="flex items-center gap-1 text-purple-400">
-                  <span className="w-2 h-2 rounded-full bg-purple-500 inline-block"></span> ארוך (&gt;5.5s)
-                </span>
-                <span className="flex items-center gap-1 text-rose-400 font-bold">
-                  <span className="w-2 h-2 rounded-full bg-rose-500 inline-block ring-1 ring-rose-300"></span> חפיפת זמנים
-                </span>
-              </div>
-            </div>
-
-            {/* Timeline Track */}
-            <div
-              className="relative w-full h-6 bg-[#0a0a0a] rounded-lg border border-[#252525] overflow-hidden select-none cursor-pointer"
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const clickX = e.clientX - rect.left;
-                const percent = Math.max(0, Math.min(1, clickX / rect.width));
-                onSeekTo(percent * effectiveDuration);
-              }}
-              title="לחץ בכל נקודה בציר הזמן כדי לקפוץ אליה בסרטון"
-            >
-              {/* Scale Ticks */}
-              <div className="absolute inset-0 flex justify-between px-1 pointer-events-none opacity-20">
-                {[0, 0.25, 0.5, 0.75, 1].map((frac, idx) => (
-                  <div key={idx} className="h-full border-r border-gray-400 flex flex-col justify-end">
-                    <span className="text-[8px] text-gray-300 font-mono scale-90 -mr-2">
-                      {Math.round(frac * effectiveDuration)}s
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Subtitle Cue Blocks */}
-              {cues.map((cue, i) => {
-                const startPct = Math.max(0, Math.min(100, (cue.startTime / effectiveDuration) * 100));
-                const cueDuration = Math.max(0.1, cue.endTime - cue.startTime);
-                const widthPct = Math.max(1.8, Math.min(100 - startPct, (cueDuration / effectiveDuration) * 100));
-                const isActive = activeCueId === cue.id;
-                const isOverlapping = overlappingCuesMap.has(cue.id);
-                const isShort = cueDuration < 1.2;
-                const isLong = cueDuration > 5.5;
-
-                return (
-                  <div
-                    key={cue.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSeekTo(cue.startTime);
-                    }}
-                    style={{
-                      left: `${startPct}%`,
-                      width: `${widthPct}%`,
-                    }}
-                    title={`#${i + 1}: ${formatTimeDisplay(cue.startTime)} - ${formatTimeDisplay(cue.endTime)} (${cueDuration.toFixed(1)}s)\n${cue.hebrewText}${isOverlapping ? "\n⚠️ חפיפת זמנים!" : ""}`}
-                    className={`absolute top-0.5 bottom-0.5 rounded transition-all flex items-center justify-center text-[9px] font-mono font-bold text-white shadow-sm hover:z-20 cursor-pointer ${
-                      isActive
-                        ? "bg-blue-500 ring-2 ring-blue-300 z-10 shadow-blue-500/50"
-                        : isOverlapping
-                        ? "bg-rose-600 ring-2 ring-rose-400 animate-pulse z-10"
-                        : isShort
-                        ? "bg-amber-500/80 hover:bg-amber-400 border border-amber-300/40"
-                        : isLong
-                        ? "bg-purple-600/80 hover:bg-purple-500 border border-purple-300/40"
-                        : "bg-emerald-600/80 hover:bg-emerald-500 border border-emerald-300/40"
-                    }`}
-                  >
-                    {widthPct > 5 && (
-                      <span className="truncate px-0.5 pointer-events-none scale-90">
-                        {cueDuration.toFixed(1)}s
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-
-              {/* Playhead Marker */}
-              <div
-                style={{
-                  left: `${Math.max(0, Math.min(100, (currentTime / effectiveDuration) * 100))}%`,
-                }}
-                className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none z-30 shadow-[0_0_8px_rgba(244,63,94,0.9)] transition-all duration-75"
-              >
-                <div className="w-2 h-2 -ml-[3.5px] -mt-0.5 bg-rose-500 rotate-45 border border-white"></div>
-              </div>
-            </div>
-          </div>
+          <InteractiveTimelineStrip
+            cues={cues}
+            activeCueId={activeCueId}
+            currentTime={currentTime}
+            videoDuration={effectiveDuration}
+            onSeekTo={onSeekTo}
+            onUpdateCue={onUpdateCue}
+            onSelectCue={(cueId) => {
+              // Optionally select cue in list
+            }}
+            overlappingCueIds={new Set(overlappingCuesMap.keys())}
+          />
         )}
 
         {/* Dynamic Feedback Toast Banner */}
@@ -1269,7 +1226,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
           </div>
         )}
 
-        {/* Recharts Duration Distribution Visualizer */}
+        {/* Recharts Duration Distribution Visualizer (Sidebar/Embedded Component with OCR Error < 1.0s Highlighting) */}
         {cues.length > 0 && (
           <DurationDistributionChart
             cues={cues}
@@ -1688,6 +1645,14 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         selectedCueIds={selectedCueIds}
         currentTime={currentTime}
         onApplyBulkShift={handleApplyBatchShift}
+      />
+
+      {/* Resolve All Sync Conflicts Modal */}
+      <SyncConflictsModal
+        isOpen={syncConflictsModalOpen}
+        onClose={() => setSyncConflictsModalOpen(false)}
+        cues={cues}
+        onApplyResolution={handleApplySyncConflicts}
       />
 
       {/* SRT / VTT Validation and Import Modal */}

@@ -20,21 +20,26 @@ export function captureVideoFrame(
   maxWidth: number = 480,
   quality: number = 0.70
 ): string {
-  const canvas = document.createElement("canvas");
-  const origW = video.videoWidth || 640;
-  const origH = video.videoHeight || 360;
-  const scale = Math.min(1, maxWidth / origW);
-  const width = Math.max(240, Math.floor(origW * scale));
-  const height = Math.max(135, Math.floor(origH * scale));
+  try {
+    const canvas = document.createElement("canvas");
+    const origW = video.videoWidth || video.clientWidth || 640;
+    const origH = video.videoHeight || video.clientHeight || 360;
+    const scale = Math.min(1, maxWidth / Math.max(1, origW));
+    const width = Math.max(240, Math.floor(origW * scale));
+    const height = Math.max(135, Math.floor(origH * scale));
 
-  canvas.width = width;
-  canvas.height = height;
+    canvas.width = width;
+    canvas.height = height;
 
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return "";
 
-  ctx.drawImage(video, 0, 0, width, height);
-  return canvas.toDataURL("image/jpeg", quality);
+    ctx.drawImage(video, 0, 0, width, height);
+    return canvas.toDataURL("image/jpeg", quality);
+  } catch (err) {
+    console.warn("Failed to capture video frame:", err);
+    return "";
+  }
 }
 
 /**
@@ -159,24 +164,23 @@ export async function sampleVideoFrames(
       if (signal?.aborted) return resolve();
 
       let timeoutId: any = null;
-      const onSeeked = () => {
+      const finish = () => {
         if (timeoutId) clearTimeout(timeoutId);
-        videoElem?.removeEventListener("seeked", onSeeked);
+        videoElem?.removeEventListener("seeked", finish);
+        videoElem?.removeEventListener("canplay", finish);
         resolve();
       };
 
-      // 500ms safety timeout if seeked doesn't fire immediately
-      timeoutId = setTimeout(() => {
-        videoElem?.removeEventListener("seeked", onSeeked);
-        resolve();
-      }, 500);
+      // 1500ms safety timeout to handle mobile video decoder seek latency
+      timeoutId = setTimeout(finish, 1500);
 
-      videoElem?.addEventListener("seeked", onSeeked, { once: true });
+      videoElem?.addEventListener("seeked", finish, { once: true });
+      videoElem?.addEventListener("canplay", finish, { once: true });
       if (videoElem) {
         try {
-          videoElem.currentTime = time;
+          videoElem.currentTime = Math.max(0, Math.min(time, duration));
         } catch (e) {
-          resolve();
+          finish();
         }
       }
     });
@@ -195,10 +199,10 @@ export async function sampleVideoFrames(
         throw new Error("Sampling cancelled by user");
       }
 
-      // Small settle for frame buffer rendering
-      await new Promise((r) => setTimeout(r, 30));
+      // Settle time for hardware frame buffer decoding on mobile
+      await new Promise((r) => setTimeout(r, 60));
 
-      const dataUrl = captureVideoFrame(videoElem, 640, 0.82);
+      const dataUrl = captureVideoFrame(videoElem, 480, 0.70);
       if (dataUrl) {
         frames.push({
           timestamp: time,

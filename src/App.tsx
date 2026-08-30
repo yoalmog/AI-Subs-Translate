@@ -424,10 +424,18 @@ export default function App() {
         progressTimerRef.current = null;
       }
 
+      let responseText = "";
+      try {
+        responseText = await response.text();
+      } catch (readErr: any) {
+        throw new Error("שגיאה בקריאת התשובה משרת ה-AI.");
+      }
+
       let data: any = null;
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        data = await response.json().catch(() => null);
+      try {
+        data = JSON.parse(responseText);
+      } catch (jsonErr) {
+        console.warn("Server returned non-JSON response:", responseText.slice(0, 150));
       }
 
       if (!response.ok || !data) {
@@ -524,10 +532,18 @@ export default function App() {
       }),
     });
 
+    let responseText = "";
+    try {
+      responseText = await response.text();
+    } catch (readErr) {
+      throw new Error("שגיאה בקריאת התשובה מהשרת.");
+    }
+
     let data: any = null;
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      data = await response.json().catch(() => null);
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      console.warn("Non-JSON translation response:", responseText.slice(0, 150));
     }
 
     if (!response.ok || !data) {
