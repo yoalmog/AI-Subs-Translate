@@ -12,6 +12,8 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
+  AlertTriangle,
+  Wrench,
 } from "lucide-react";
 import { SubtitleStyleSettings, SubtitleStylePreset } from "../types";
 import {
@@ -106,26 +108,26 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
         </button>
       </div>
 
-      {/* SECTION 0: Style Presets Manager (ערכות עיצוב מוכנות) */}
-      <div className="bg-[#111111] border border-[#262626] rounded-lg p-3.5 flex flex-col gap-3">
+      {/* SECTION 0: Theme Gallery (גלריית נושאים ותבניות עיצוב) */}
+      <div className="bg-[#111111] border border-[#262626] rounded-lg p-3.5 flex flex-col gap-3.5" id="theme-gallery-section">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Bookmark className="w-4 h-4 text-purple-400" />
-            <span className="text-xs font-bold text-gray-200">
-              ערכות עיצוב מוכנות (Presets System)
+            <Sparkles className="w-4.5 h-4.5 text-amber-400" />
+            <span className="text-xs font-extrabold text-white font-rubik tracking-wide">
+              גלריית נושאים (Theme Gallery)
             </span>
           </div>
           <button
             onClick={() => setIsSavingPreset(!isSavingPreset)}
-            className="flex items-center gap-1 text-xs text-purple-300 hover:text-white px-2.5 py-1 rounded bg-purple-600/20 border border-purple-500/30 hover:bg-purple-600/30 transition cursor-pointer"
+            className="flex items-center gap-1 text-[11px] text-purple-300 hover:text-white px-2.5 py-1 rounded bg-purple-600/20 border border-purple-500/30 hover:bg-purple-600/30 transition cursor-pointer shadow-xs"
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Plus className="w-3.5 h-3.5 text-purple-400" />
             <span>שמור ערכה מותאמת אישית</span>
           </button>
         </div>
 
         {presetSavedNotice && (
-          <div className="bg-purple-950/70 border border-purple-500/40 text-purple-200 text-xs px-3 py-1.5 rounded-md flex items-center gap-2">
+          <div className="bg-purple-950/70 border border-purple-500/40 text-purple-200 text-xs px-3 py-1.5 rounded-md flex items-center gap-2 animate-in fade-in">
             <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
             <span>{presetSavedNotice}</span>
           </div>
@@ -159,42 +161,94 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
           </form>
         )}
 
-        {/* Presets Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+        {/* Theme Cards Grid with Live Subtitle Preview */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1">
           {allPresets.map((preset) => {
             const isActive = activePresetId === preset.id;
+            const pStyles = preset.styles;
+
             return (
               <div
                 key={preset.id}
+                id={`theme-card-${preset.id}`}
                 onClick={() => handleSelectPreset(preset)}
-                className={`relative p-2.5 rounded-lg border text-right transition cursor-pointer flex flex-col justify-between gap-1.5 ${
+                className={`relative p-3 rounded-xl border text-right transition cursor-pointer flex flex-col justify-between gap-2 overflow-hidden ${
                   isActive
-                    ? "bg-purple-950/30 border-purple-500 shadow-md ring-1 ring-purple-500/40"
-                    : "bg-[#161616] border-[#292929] hover:bg-[#1f1f1f] hover:border-[#383838]"
+                    ? "bg-gradient-to-br from-purple-950/50 via-indigo-950/40 to-blue-950/40 border-purple-400 shadow-lg ring-2 ring-purple-500/50"
+                    : "bg-[#161616] border-[#292929] hover:bg-[#1c1c1c] hover:border-[#3d3d3d]"
                 }`}
               >
+                {/* Top Badge & Title */}
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-xs font-bold text-white truncate">{preset.nameHebrew}</span>
+                  <span className="text-xs font-extrabold text-white truncate font-rubik">
+                    {preset.nameHebrew}
+                  </span>
                   {preset.badge && (
-                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold shrink-0 ${
-                      preset.isBuiltIn ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    <span className={`px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0 ${
+                      preset.id === "retro-tv"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                        : preset.id === "high-contrast-accessibility"
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                        : preset.id === "minimalist-dark"
+                        ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                        : preset.id === "neon-cyber"
+                        ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                        : "bg-blue-500/20 text-blue-300 border border-blue-500/40"
                     }`}>
                       {preset.badge}
                     </span>
                   )}
                 </div>
 
-                <p className="text-[10px] text-gray-400 line-clamp-2 leading-tight">
+                {/* Theme Description */}
+                <p className="text-[10.5px] text-gray-300 line-clamp-2 leading-snug">
                   {preset.description}
                 </p>
 
-                <div className="flex items-center justify-between pt-1 border-t border-[#222222] mt-0.5">
-                  <div className="flex items-center gap-1 text-[10px] text-gray-300">
-                    <span className="w-2.5 h-2.5 rounded-full border border-gray-600" style={{ backgroundColor: preset.styles.textColor }}></span>
-                    <span>{preset.styles.fontFamily}</span>
+                {/* Live Miniature Subtitle Preview Box */}
+                <div className="w-full bg-[#0a0a0c] border border-[#222226] rounded-md h-12 p-1.5 flex items-center justify-center relative overflow-hidden my-0.5">
+                  <div
+                    className="px-2 py-0.5 text-center transition-all truncate max-w-full"
+                    style={{
+                      fontFamily: pStyles.fontFamily,
+                      color: pStyles.textColor,
+                      fontSize: "12px",
+                      fontWeight: pStyles.bold ? 700 : 500,
+                      borderRadius: `${pStyles.borderRadius}px`,
+                      backgroundColor: (() => {
+                        if (!pStyles.backgroundOpacity || pStyles.backgroundOpacity <= 0) return "transparent";
+                        const hex = pStyles.backgroundColor || "#000000";
+                        const clean = hex.replace("#", "");
+                        const r = parseInt(clean.substring(0, 2), 16) || 0;
+                        const g = parseInt(clean.substring(2, 4), 16) || 0;
+                        const b = parseInt(clean.substring(4, 6), 16) || 0;
+                        return `rgba(${r}, ${g}, ${b}, ${pStyles.backgroundOpacity})`;
+                      })(),
+                      textShadow: pStyles.strokeWidth > 0
+                        ? `-${pStyles.strokeWidth}px -${pStyles.strokeWidth}px 0 ${pStyles.strokeColor}, ${pStyles.strokeWidth}px -${pStyles.strokeWidth}px 0 ${pStyles.strokeColor}, -${pStyles.strokeWidth}px ${pStyles.strokeWidth}px 0 ${pStyles.strokeColor}, ${pStyles.strokeWidth}px ${pStyles.strokeWidth}px 0 ${pStyles.strokeColor}`
+                        : "0 1px 3px rgba(0,0,0,0.8)",
+                    }}
+                    dir="rtl"
+                  >
+                    כתובית לדוגמה
+                  </div>
+                </div>
+
+                {/* Footer Info & Delete Action */}
+                <div className="flex items-center justify-between pt-1 border-t border-[#222222] text-[10px] text-gray-400">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full border border-gray-600 shrink-0" style={{ backgroundColor: pStyles.textColor }}></span>
+                    <span>{pStyles.fontFamily}</span>
+                    <span>•</span>
+                    <span>{pStyles.fontSize}px</span>
                   </div>
 
-                  {!preset.isBuiltIn && (
+                  {isActive ? (
+                    <span className="text-purple-300 font-bold flex items-center gap-1">
+                      <Check className="w-3 h-3 text-purple-400" />
+                      <span>פעיל</span>
+                    </span>
+                  ) : !preset.isBuiltIn ? (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -205,7 +259,7 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>
-                  )}
+                  ) : null}
                 </div>
               </div>
             );
@@ -460,7 +514,7 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
         </div>
 
         {/* Subtitle Vertical Position */}
-        <div>
+        <div className="space-y-2">
           <div className="flex items-center justify-between text-xs text-gray-300 mb-1">
             <span>מיקום אנכי של הכתובית החדשה (גובה מהתחתית):</span>
             <span className="font-mono text-blue-400 font-bold">{styles.positionBottomPercent}%</span>
@@ -476,6 +530,27 @@ export const StyleControls: React.FC<StyleControlsProps> = ({
             }
             className="w-full h-1.5 bg-[#222222] rounded-lg appearance-none cursor-pointer accent-blue-500"
           />
+
+          {/* Intelligent Margin Feature Suggestion Banner */}
+          {styles.positionBottomPercent <= 14 && (
+            <div className="p-3 bg-amber-950/70 border border-amber-500/50 rounded-lg flex flex-col gap-2 text-amber-200 animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="text-xs font-bold">אזהרת מרווח חכם (Intelligent Margin Overlap):</span>
+              </div>
+              <p className="text-[11px] text-amber-300/90 leading-normal">
+                מיקום הכתובית הנוכחי ({styles.positionBottomPercent}%) נמוך מדי עלול לחפוף לסרגל הנגן המובנה בסרטון (Playback Scrub Bar) או לבאנר מודגש בתחתית.
+              </p>
+              <button
+                type="button"
+                onClick={() => onChange({ ...styles, positionBottomPercent: 18 })}
+                className="self-start px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold text-[11px] rounded transition flex items-center gap-1 cursor-pointer shadow-md"
+              >
+                <Wrench className="w-3.5 h-3.5" />
+                <span>התאם למרווח בטוח מוצע (18%)</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

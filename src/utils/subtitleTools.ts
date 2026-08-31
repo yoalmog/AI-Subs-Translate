@@ -201,6 +201,89 @@ export function mergeShortOrOverlappingCues(
   };
 }
 
+export interface SmartMergeResult {
+  mergedCues: SubtitleCue[];
+  mergedCount: number;
+  speakerMergeCount: number;
+  sentenceMergeCount: number;
+}
+
+/**
+ * Smart Merge: Identifies consecutive cues with identical speakers or overlapping/continuing sentences
+ * and merges them into a single cohesive subtitle cue while maintaining correct timestamps.
+ */
+export function smartMergeCues(cues: SubtitleCue[]): SmartMergeResult {
+  if (!cues || cues.length <= 1) {
+    return { mergedCues: cues || [], mergedCount: 0, speakerMergeCount: 0, sentenceMergeCount: 0 };
+  }
+
+  const sorted = [...cues].sort((a, b) => a.startTime - b.startTime);
+  const result: SubtitleCue[] = [];
+  let mergedCount = 0;
+  let speakerMergeCount = 0;
+  let sentenceMergeCount = 0;
+
+  let current = { ...sorted[0] };
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+
+    const currentSpeaker = (current.speaker || "").trim();
+    const nextSpeaker = (next.speaker || "").trim();
+    const gap = next.startTime - current.endTime;
+    const isOverlappingOrVeryClose = gap <= 1.2;
+
+    const currentHeb = (current.hebrewText || "").trim();
+    const nextHeb = (next.hebrewText || "").trim();
+    const currentOrig = (current.originalText || "").trim();
+
+    // Sentence continuation check: current text does NOT end with terminal punctuation (. ? ! …)
+    const endsWithTerminalPunctuation = /[.?!…:;"]$/.test(currentHeb) || /[.?!…:;"]$/.test(currentOrig);
+    const isSentenceContinuation = !endsWithTerminalPunctuation && gap <= 1.5;
+
+    // Identical speakers check
+    const hasSameSpeaker = currentSpeaker.length > 0 && currentSpeaker.toLowerCase() === nextSpeaker.toLowerCase() && gap <= 1.5;
+
+    // Combined text length constraint
+    const combinedLength = (currentHeb + " " + nextHeb).length;
+    const isReasonableLength = combinedLength <= 130;
+
+    // Decision to merge:
+    if ((hasSameSpeaker || isSentenceContinuation || gap < 0.4) && isOverlappingOrVeryClose && isReasonableLength) {
+      if (hasSameSpeaker) speakerMergeCount++;
+      if (isSentenceContinuation) sentenceMergeCount++;
+      mergedCount++;
+
+      // Merge timestamps
+      current.endTime = Math.max(current.endTime, next.endTime);
+
+      // Merge text
+      if (nextHeb && !currentHeb.endsWith(nextHeb)) {
+        current.hebrewText = currentHeb ? `${currentHeb} ${nextHeb}` : nextHeb;
+      }
+      const nextOrig = (next.originalText || "").trim();
+      if (nextOrig && !currentOrig.endsWith(nextOrig)) {
+        current.originalText = currentOrig ? `${currentOrig} ${nextOrig}` : nextOrig;
+      }
+
+      current.speaker = currentSpeaker || nextSpeaker;
+      current.isEdited = true;
+    } else {
+      result.push(current);
+      current = { ...next };
+    }
+  }
+
+  result.push(current);
+
+  return {
+    mergedCues: result,
+    mergedCount,
+    speakerMergeCount,
+    sentenceMergeCount,
+  };
+}
+
 /**
  * Validates an SRT/VTT file string for syntax errors, malformed timecodes,
  * inverted start/end times, and overlapping cues.
@@ -361,6 +444,17 @@ export function validateSrtFile(rawContent: string): SrtValidationResult {
 }
 
 /**
+ * Automatically fixes overlapping cues by adjusting end times of earlier cues.
+ */
+export function autoFixOverlappingCues(cues: SubtitleCue[]): SubtitleCue[] {
+  const result = resolveAllSyncConflicts(cues, {
+    minGapSeconds: 0.05,
+    strategy: "smart-balance",
+  });
+  return result.resolvedCues;
+}
+
+/**
  * Options for resolving timing sync conflicts and adjusting gaps between adjacent cues.
  */
 export interface ConflictResolutionOptions {
@@ -492,11 +586,243 @@ export function resolveAllSyncConflicts(
 /**
  * Automatically adjusts overlapping subtitle timings to maintain a clean sequence with no overlaps.
  */
-export function autoFixOverlappingCues(cues: SubtitleCue[], bufferSeconds: number = 0.05): SubtitleCue[] {
-  const result = resolveAllSyncConflicts(cues, {
-    minGapSeconds: bufferSeconds,
-    strategy: "smart-balance",
-  });
-  return result.resolvedCues;
+export interface SubtitleCleanupIssue {
+  id: string;
+  cueId: string;
+  cueIndex: number;
+  type: "empty" | "suspicious-duration-short" | "suspicious-duration-long" | "text-overflow" | "invalid-timestamps";
+  severity: "error" | "warning";
+  message: string;
+  details: string;
+  suggestedFixAction: string;
 }
+
+export interface SubtitleCleanupReport {
+  totalCues: number;
+  issuesCount: number;
+  emptyCount: number;
+  suspiciousShortCount: number;
+  suspiciousLongCount: number;
+  overflowCount: number;
+  invalidTimingCount: number;
+  issues: SubtitleCleanupIssue[];
+  fixedCues: SubtitleCue[];
+}
+
+/**
+ * Subtitle Clean-up Wizard: Analyzes all current cues and flags common errors like:
+ * - Empty text fields
+ * - Text that exceeds safe display areas (when rendered)
+ * - Cues that have suspicious duration values (< 300ms or > 15s)
+ * - Invalid timestamps (endTime <= startTime)
+ * Also provides a clean array of auto-trimmed/fixed cues for 'Fix All'.
+ */
+export function runSubtitleCleanupWizard(cues: SubtitleCue[]): SubtitleCleanupReport {
+  if (!cues) {
+    return {
+      totalCues: 0,
+      issuesCount: 0,
+      emptyCount: 0,
+      suspiciousShortCount: 0,
+      suspiciousLongCount: 0,
+      overflowCount: 0,
+      invalidTimingCount: 0,
+      issues: [],
+      fixedCues: [],
+    };
+  }
+
+  const issues: SubtitleCleanupIssue[] = [];
+  let emptyCount = 0;
+  let suspiciousShortCount = 0;
+  let suspiciousLongCount = 0;
+  let overflowCount = 0;
+  let invalidTimingCount = 0;
+
+  const fixedCues: SubtitleCue[] = [];
+
+  cues.forEach((cue, index) => {
+    const cueNum = index + 1;
+    const duration = cue.endTime - cue.startTime;
+    const heb = (cue.hebrewText || "").trim();
+    const orig = (cue.originalText || "").trim();
+
+    let isCueRemoved = false;
+    let updatedCue = { ...cue };
+
+    // 1. Check for empty text
+    if (!heb && !orig) {
+      emptyCount++;
+      isCueRemoved = true;
+      issues.push({
+        id: `empty-${cue.id}`,
+        cueId: cue.id,
+        cueIndex: cueNum,
+        type: "empty",
+        severity: "error",
+        message: `כתובית #${cueNum} ריקה מתוכן`,
+        details: "גם טקסט המקור וגם הטקסט בעברית ריקים מתוכן.",
+        suggestedFixAction: "מחיקת כתובית ריקה",
+      });
+    }
+
+    // 2. Check invalid timing
+    if (duration <= 0) {
+      invalidTimingCount++;
+      issues.push({
+        id: `invalid-${cue.id}`,
+        cueId: cue.id,
+        cueIndex: cueNum,
+        type: "invalid-timestamps",
+        severity: "error",
+        message: `כתובית #${cueNum}: זמן סיום שגוי או שווה למועד התחלה`,
+        details: `משך נוכחי: ${duration.toFixed(2)} שניות (מועד התחלה ${cue.startTime}s, סיום ${cue.endTime}s).`,
+        suggestedFixAction: "תיקון משך ל-1.5 שניות תקינות",
+      });
+      updatedCue.endTime = Number((updatedCue.startTime + 1.5).toFixed(3));
+      updatedCue.isEdited = true;
+    }
+    // 3. Suspicious duration < 300ms (0.3s)
+    else if (duration < 0.3) {
+      suspiciousShortCount++;
+      issues.push({
+        id: `short-${cue.id}`,
+        cueId: cue.id,
+        cueIndex: cueNum,
+        type: "suspicious-duration-short",
+        severity: "warning",
+        message: `כתובית #${cueNum}: משך תצוגה קצר מדי (פחות מ-300ms)`,
+        details: `משך נוכחי: ${(duration * 1000).toFixed(0)}ms (${duration.toFixed(2)} שניות) - הטקסט ייעלם מהר מדי מהמסך.`,
+        suggestedFixAction: "הרחבת משך התצוגה ל-1.2 שניות",
+      });
+      updatedCue.endTime = Number((updatedCue.startTime + 1.2).toFixed(3));
+      updatedCue.isEdited = true;
+    }
+    // 4. Suspicious duration > 15.0s
+    else if (duration > 15.0) {
+      suspiciousLongCount++;
+      issues.push({
+        id: `long-${cue.id}`,
+        cueId: cue.id,
+        cueIndex: cueNum,
+        type: "suspicious-duration-long",
+        severity: "warning",
+        message: `כתובית #${cueNum}: משך תצוגה ארוך מדי (מעל 15 שניות)`,
+        details: `משך נוכחי: ${duration.toFixed(1)} שניות - חשד לכתובית שנגררת לאורך סצינה שלמה.`,
+        suggestedFixAction: "קיצוץ משך תצוגה מקסימלי ל-8.0 שניות",
+      });
+      updatedCue.endTime = Number((updatedCue.startTime + 8.0).toFixed(3));
+      updatedCue.isEdited = true;
+    }
+
+    // 5. Exceeds safe display area (overflow text)
+    const lineBreakCount = (heb.match(/\n/g) || []).length;
+    const isSingleLineTooLong = heb.length > 75 || orig.length > 85;
+    const hasTooManyLines = lineBreakCount >= 3;
+
+    if (isSingleLineTooLong || hasTooManyLines) {
+      overflowCount++;
+      issues.push({
+        id: `overflow-${cue.id}`,
+        cueId: cue.id,
+        cueIndex: cueNum,
+        type: "text-overflow",
+        severity: "warning",
+        message: `כתובית #${cueNum}: הטקסט חורג מגבולות התצוגה הבטוחים`,
+        details: `אורך טקסט: ${heb.length} תווים, ${lineBreakCount + 1} שורות. חריגה מהמגבלה של 75 תווים / 2 שורות.`,
+        suggestedFixAction: "פיצול אוטומטי לשורות מאוזנות וקיטום תווים חורגים",
+      });
+
+      // Auto-wrap/trim for fix
+      if (heb.length > 75 && !heb.includes("\n")) {
+        const words = heb.split(" ");
+        const mid = Math.ceil(words.length / 2);
+        updatedCue.hebrewText = words.slice(0, mid).join(" ") + "\n" + words.slice(mid).join(" ");
+        updatedCue.isEdited = true;
+      }
+    }
+
+    if (!isCueRemoved) {
+      fixedCues.push(updatedCue);
+    }
+  });
+
+  return {
+    totalCues: cues.length,
+    issuesCount: issues.length,
+    emptyCount,
+    suspiciousShortCount,
+    suspiciousLongCount,
+    overflowCount,
+    invalidTimingCount,
+    issues,
+    fixedCues,
+  };
+}
+
+export interface SubtitleDensityBucket {
+  index: number;
+  startTime: number;
+  endTime: number;
+  totalChars: number;
+  cueCount: number;
+  densityScore: number; // 0.0 (empty) to 1.0 (extreme clutter)
+  isCluttered: boolean;
+}
+
+/**
+ * Calculates a Subtitle Density Heatmap across the video timeline,
+ * identifying cluttered scenes with high text volume or rapid subtitle cues.
+ */
+export function calculateSubtitleDensityHeatmap(
+  cues: SubtitleCue[],
+  totalDuration: number,
+  numBuckets: number = 60
+): SubtitleDensityBucket[] {
+  if (!totalDuration || totalDuration <= 0) return [];
+  const bucketWidth = totalDuration / Math.max(10, numBuckets);
+  const buckets: SubtitleDensityBucket[] = [];
+
+  for (let b = 0; b < numBuckets; b++) {
+    const bStart = b * bucketWidth;
+    const bEnd = (b + 1) * bucketWidth;
+
+    let totalChars = 0;
+    let cueCount = 0;
+
+    cues.forEach((c) => {
+      // Check overlap between cue and bucket
+      if (c.startTime < bEnd && c.endTime > bStart) {
+        cueCount++;
+        const hebLen = (c.hebrewText || "").length;
+        const origLen = (c.originalText || "").length;
+        const charLen = Math.max(hebLen, origLen);
+        totalChars += charLen;
+      }
+    });
+
+    // Score calculation:
+    // Standard comfortable density is ~25 chars per 3 seconds.
+    // > 60 chars or > 2 cues in a bucket window indicates clutter.
+    const expectedCharsMax = Math.max(30, bucketWidth * 18);
+    let densityScore = Math.min(1.0, totalChars / expectedCharsMax);
+
+    if (cueCount >= 3) {
+      densityScore = Math.min(1.0, densityScore + 0.25);
+    }
+
+    buckets.push({
+      index: b,
+      startTime: bStart,
+      endTime: bEnd,
+      totalChars,
+      cueCount,
+      densityScore: Number(densityScore.toFixed(2)),
+      isCluttered: densityScore > 0.65,
+    });
+  }
+
+  return buckets;
+}
+
 

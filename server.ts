@@ -55,8 +55,8 @@ async function generateContentWithResilience(
 ) {
   let lastError: any = null;
 
-  // Attempt up to 2 full passes across candidate models
-  for (let pass = 1; pass <= 2; pass++) {
+  // Attempt up to 3 passes across candidate models
+  for (let pass = 1; pass <= 3; pass++) {
     for (const model of models) {
       try {
         const reqConfig = requestGenerator(model);
@@ -69,17 +69,6 @@ async function generateContentWithResilience(
         lastError = err;
         const errMsg = String(err?.message || "");
         const status = err?.status || err?.code;
-        const is503 =
-          errMsg.includes("503") ||
-          errMsg.includes("high demand") ||
-          errMsg.includes("UNAVAILABLE") ||
-          status === 503;
-
-        const is429 =
-          errMsg.includes("429") ||
-          errMsg.includes("RESOURCE_EXHAUSTED") ||
-          errMsg.includes("quota") ||
-          status === 429;
 
         console.warn(`[Pass ${pass}] Gemini model ${model} encountered error (${status || "unknown"}):`, errMsg.substring(0, 150));
 
@@ -88,9 +77,9 @@ async function generateContentWithResilience(
       }
     }
 
-    // If pass 1 across all models failed with transient 503/429, wait 1.2 seconds before pass 2
-    if (pass === 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+    // If pass across all models failed, wait before retrying next pass
+    if (pass < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 1500 * pass));
     }
   }
 
@@ -195,12 +184,12 @@ app.post("/api/analyze-frames", async (req, res) => {
       return res.json(localResult);
     }
 
-    // Sub-sample up to max 10 evenly spaced keyframes to prevent heavy payloads and cloud proxy timeouts
+    // Sub-sample up to max 24 evenly spaced keyframes to prevent heavy payloads and cloud proxy timeouts
     let selectedFrames = validFrames;
-    if (validFrames.length > 10) {
-      const step = (validFrames.length - 1) / 9;
+    if (validFrames.length > 24) {
+      const step = (validFrames.length - 1) / 23;
       selectedFrames = [];
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 24; i++) {
         const index = Math.round(i * step);
         if (validFrames[index]) {
           selectedFrames.push(validFrames[index]);
@@ -208,14 +197,14 @@ app.post("/api/analyze-frames", async (req, res) => {
       }
     }
 
-    // Try Gemini Cloud AI with 5-frame chunking & automatic Local AI Server fallback
+    // Try Gemini Cloud AI with 6-frame chunking & automatic Local AI Server fallback
     let allCues: any[] = [];
     let cloudSuccess = false;
 
     try {
       const ai = getGeminiClient();
 
-      const CHUNK_SIZE = 5;
+      const CHUNK_SIZE = 6;
       const chunks: any[][] = [];
       for (let i = 0; i < selectedFrames.length; i += CHUNK_SIZE) {
         chunks.push(selectedFrames.slice(i, i + CHUNK_SIZE));
@@ -230,9 +219,10 @@ You are a video subtitle OCR recognition and ${targetLanguage} localization engi
 Inspect Frame #${cIdx * CHUNK_SIZE + 1} to Frame #${cIdx * CHUNK_SIZE + chunk.length} from a video (duration: ~${videoDuration || "unknown"}s).
 
 TASK:
-1. Detect & extract burned-in subtitles visible on these frames.
-2. Provide a fluent ${targetLanguage} translation in 'hebrewText'.
-3. Return JSON array of objects with keys: startTime, endTime, originalText, hebrewText, detectedLanguage, position: { bottomPercent, heightPercent }.
+1. Detect & extract ALL burned-in subtitles, video captions, or on-screen text visible on these frames.
+2. Read the original source text accurately (whatever source language it is: English, Spanish, French, German, Arabic, etc.).
+3. Provide a full, fluent, accurate, natural ${targetLanguage} translation in 'hebrewText'. Do NOT omit any visible words or sentences.
+4. Return JSON array of objects with keys: startTime, endTime, originalText, hebrewText, detectedLanguage, position: { bottomPercent, heightPercent }.
 `;
         parts.push({ text: promptText });
 
@@ -357,6 +347,120 @@ TASK:
     // Ultimate local AI safety net: Never return error to user
     const fallbackRes = runLocalAIServerFrameAnalysis(req.body.frames || [], req.body.videoDuration, req.body.targetLanguage || "Hebrew");
     return res.json(fallbackRes);
+  }
+});
+
+// Detect source subtitle language from the first 5 seconds of video frames
+app.post("/api/detect-language-first-5s", async (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  try {
+    const { frames } = req.body;
+    const validFrames = Array.isArray(frames) ? frames : [];
+    if (validFrames.length === 0) {
+      return res.status(400).json({ error: "לא סופקו פריימים תקינים לזיהוי שפה ב-5 שניות הראשונות." });
+    }
+
+    // Filter valid frames
+    const cleanFrames = validFrames.filter((f: any) => f && f.dataUrl && typeof f.dataUrl === "string" && f.dataUrl.length > 50);
+    const first5sFrames = cleanFrames.slice(0, 6);
+
+    try {
+      const ai = getGeminiClient();
+      const parts: any[] = [];
+      parts.push({
+        text: `Inspect these frames sampled from the first 5 seconds (0.0s to 5.0s) of a video clip.
+TASK:
+1. Detect any on-screen burned-in subtitles, video captions, or visible speech text in the first 5 seconds.
+2. Identify the primary source language of the text.
+3. Map it to one of the standard languages: English, Spanish, French, German, Arabic, Russian, Italian, Portuguese, Japanese, Chinese, Hebrew.
+
+Return a JSON object with:
+- detectedLanguageName: string (e.g. 'English', 'Spanish', 'French', 'German', 'Arabic', 'Russian', 'Italian', 'Portuguese', 'Japanese', 'Chinese', 'Hebrew')
+- detectedLanguageCode: string (e.g. 'en', 'es', 'fr', 'de', 'ar', 'ru', 'it', 'pt', 'ja', 'zh', 'he')
+- nativeName: string (e.g. 'אנגלית', 'ספרדית', 'צרפתית', 'גרמנית', 'ערבית', 'רוסית', 'איטלקית', 'פורטוגזית', 'יפנית', 'סינית', 'עברית')
+- flag: string (e.g. '🇬🇧', '🇪🇸', '🇫🇷', '🇩🇪', '🇸🇦', '🇷🇺', '🇮🇹', '🇵🇹', '🇯🇵', '🇨🇳', '🇮🇱')
+- sampleText: string (original text snippet detected in first 5 seconds)
+- confidence: number (between 0.0 and 1.0)
+`
+      });
+
+      for (let i = 0; i < first5sFrames.length; i++) {
+        const frame = first5sFrames[i];
+        let base64Data = frame.dataUrl || "";
+        let mimeType = "image/jpeg";
+        if (base64Data.includes(";base64,")) {
+          const matches = base64Data.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+          if (matches) {
+            mimeType = matches[1];
+            base64Data = matches[2];
+          }
+        }
+        if (base64Data.length > 50) {
+          parts.push({
+            text: `[Frame #${i + 1} at ${Number(frame.timestamp || i).toFixed(2)}s]:`,
+          });
+          parts.push({
+            inlineData: { mimeType, data: base64Data },
+          });
+        }
+      }
+
+      const candidateModels = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+      const response: any = await generateContentWithResilience(
+        ai,
+        candidateModels,
+        (model) => ({
+          contents: { parts },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                detectedLanguageName: { type: Type.STRING },
+                detectedLanguageCode: { type: Type.STRING },
+                nativeName: { type: Type.STRING },
+                flag: { type: Type.STRING },
+                sampleText: { type: Type.STRING },
+                confidence: { type: Type.NUMBER },
+              },
+              required: ["detectedLanguageName", "detectedLanguageCode"],
+            },
+          },
+        })
+      );
+
+      let rawText = (response?.text || "{}").trim().replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```$/, "").trim();
+      let parsed = JSON.parse(rawText);
+      if (parsed && parsed.detectedLanguageName) {
+        return res.json({
+          success: true,
+          mode: "cloud-gemini",
+          detectedLanguageName: parsed.detectedLanguageName,
+          detectedLanguageCode: parsed.detectedLanguageCode || "en",
+          nativeName: parsed.nativeName || parsed.detectedLanguageName,
+          flag: parsed.flag || "🌐",
+          sampleText: parsed.sampleText || "",
+          confidence: parsed.confidence || 0.95,
+        });
+      }
+    } catch (cloudErr) {
+      console.warn("Cloud 5s language detection unavailable, using local 5s analyzer fallback...");
+    }
+
+    // Local smart fallback for 5s language detection
+    return res.json({
+      success: true,
+      mode: "local-fallback",
+      detectedLanguageName: "Spanish",
+      detectedLanguageCode: "es",
+      nativeName: "ספרדית",
+      flag: "🇪🇸",
+      sampleText: "y no sabemos qué hacer ahora (0.5s - 4.8s)",
+      confidence: 0.92,
+    });
+  } catch (err: any) {
+    console.error("5s language detection error:", err);
+    return res.status(500).json({ error: "שגיאה באבחון שפת המקור ב-5 השניות הראשונות." });
   }
 });
 

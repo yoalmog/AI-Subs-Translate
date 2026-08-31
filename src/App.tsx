@@ -20,10 +20,14 @@ import {
 } from "./components/EfficiencyDashboard";
 import {
   AnalysisModal,
+  DetectedLanguage5sResult,
 } from "./components/AnalysisModal";
 import {
   ExportModal,
 } from "./components/ExportModal";
+import {
+  MemoryDiagnosticOverlay,
+} from "./components/MemoryDiagnosticOverlay";
 import {
   SubtitleCue,
   SubtitleStyleSettings,
@@ -161,6 +165,10 @@ export default function App() {
   const [glossary, setGlossary] = useState<GlossaryDictionary>({});
   const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
   const [savedDraftAvailable, setSavedDraftAvailable] = useState<AutoSaveDraft | null>(null);
+
+  // Frame Enhancement and Secondary Source Languages for OCR Analysis
+  const [enhanceFrames, setEnhanceFrames] = useState<boolean>(true);
+  const [selectedSourceLanguages, setSelectedSourceLanguages] = useState<string[]>(["Auto-detect"]);
   const [projectBannerMessage, setProjectBannerMessage] = useState<{
     type: "success" | "error" | "info";
     text: string;
@@ -411,6 +419,54 @@ export default function App() {
     setShowAnalysisModal(false);
   };
 
+  // Feature: Automatically analyze the first 5 seconds of the source video to detect subtitle language
+  const handleDetectLanguageFirst5s = async (): Promise<DetectedLanguage5sResult | null> => {
+    const handle = playerRef.current?.getSourceHandle();
+    if (!handle) return null;
+
+    try {
+      // Sample 4-5 frames adaptively from the first 5 seconds (0.4s to 4.8s)
+      const first5sFrames = await sampleVideoFrames(
+        handle,
+        0.9,
+        undefined,
+        5, // max 5 frames in the first 5 seconds
+        undefined,
+        { enhanceFrames, contrastBoost: 145, sharpenText: enhanceFrames }
+      );
+
+      if (!first5sFrames || first5sFrames.length === 0) {
+        return null;
+      }
+
+      // Compress frames for payload
+      const compressedFrames = compressFramesForApiPayload(first5sFrames, 6);
+
+      const result = await safeFetchJson<any>("/api/detect-language-first-5s", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          frames: compressedFrames,
+        }),
+      });
+
+      if (result.ok && result.data && result.data.detectedLanguageName) {
+        return {
+          detectedLanguageName: result.data.detectedLanguageName,
+          detectedLanguageCode: result.data.detectedLanguageCode || "en",
+          nativeName: result.data.nativeName || result.data.detectedLanguageName,
+          flag: result.data.flag || "🌐",
+          sampleText: result.data.sampleText || "",
+          confidence: result.data.confidence || 0.95,
+        };
+      }
+      return null;
+    } catch (err) {
+      console.warn("Error detecting language in first 5s:", err);
+      return null;
+    }
+  };
+
   // AI Subtitle Scanning & Hebrew Translation
   const handleStartAnalysis = async () => {
     const handle = playerRef.current?.getSourceHandle();
@@ -448,7 +504,7 @@ export default function App() {
     });
 
     try {
-      // Step 1: Sample video frames adaptively with high clarity
+      // Step 1: Sample video frames adaptively with high clarity and enhancement filters
       const sampledFrames = await sampleVideoFrames(
         handle,
         1.0,
@@ -464,7 +520,8 @@ export default function App() {
           });
         },
         targetFrames,
-        controller.signal
+        controller.signal,
+        { enhanceFrames, contrastBoost: 145, brightnessBoost: 105, sharpenText: enhanceFrames }
       );
 
       if (controller.signal.aborted) return;
@@ -506,8 +563,8 @@ export default function App() {
         });
       }, 400);
 
-      // Compress sampled frames for ultra-light network payload (<200KB)
-      const apiPayloadFrames = compressFramesForApiPayload(sampledFrames, 8);
+      // Compress sampled frames for full coverage network payload
+      const apiPayloadFrames = compressFramesForApiPayload(sampledFrames, 24);
 
       const result = await safeFetchJson<any>("/api/analyze-frames", {
         method: "POST",
@@ -515,7 +572,7 @@ export default function App() {
         body: JSON.stringify({
           frames: apiPayloadFrames,
           videoDuration: duration,
-          languageHint: "Auto-detect",
+          languageHint: selectedSourceLanguages.join(", "),
           targetLanguage: targetLanguage.name,
           glossary: glossary,
         }),
@@ -954,6 +1011,17 @@ export default function App() {
 
         {/* RIGHT COLUMN: Subtitle Editor & Tools (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-4">
+          {/* Sidebar Memory Diagnostic Panel */}
+          <MemoryDiagnosticOverlay
+            onCacheCleared={(stats) => {
+              setProjectBannerMessage({
+                type: "info",
+                text: `שחרור זיכרון הושלם: שוחררו ${stats.revokedUrlsCount} אובייקטי URL ופונה מטמון הווידאו.`,
+              });
+              setTimeout(() => setProjectBannerMessage(null), 4000);
+            }}
+          />
+
           {/* Efficiency Dashboard Panel (When toggled) */}
           {showEfficiencyDashboard && (
             <div className="animate-in fade-in slide-in-from-top-2">
@@ -1056,6 +1124,11 @@ export default function App() {
         onRetry={handleStartAnalysis}
         progress={analysisProgress}
         recentFrames={recentFrames}
+        enhanceFrames={enhanceFrames}
+        onToggleEnhanceFrames={setEnhanceFrames}
+        selectedSourceLanguages={selectedSourceLanguages}
+        onSourceLanguagesChange={setSelectedSourceLanguages}
+        onDetectLanguageFirst5s={handleDetectLanguageFirst5s}
       />
 
       {/* MODAL 2: Export Subtitles & Burned-in Video */}

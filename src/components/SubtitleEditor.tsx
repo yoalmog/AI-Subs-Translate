@@ -36,7 +36,11 @@ import {
   BookOpen,
   Zap,
   Users,
+  Film,
+  Wrench,
+  Columns,
 } from "lucide-react";
+import { SubtitleCleanupWizardModal } from "./SubtitleCleanupWizardModal";
 import { SubtitleCue, TonePreference } from "../types";
 import { formatTimeDisplay } from "../utils/timeFormat";
 import {
@@ -46,6 +50,7 @@ import {
   SrtValidationResult,
   resolveAllSyncConflicts,
   ConflictResolutionResult,
+  smartMergeCues,
 } from "../utils/subtitleTools";
 import { TARGET_LANGUAGES, TargetLanguage, DEFAULT_LANGUAGE } from "../data/languages";
 import { AutoSaveDraft } from "../utils/autoSave";
@@ -188,12 +193,88 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
   };
   const [showToneMenu, setShowToneMenu] = useState<boolean>(false);
 
+  // View Mode: 'standard' vs 'comparison'
+  const [viewMode, setViewMode] = useState<"standard" | "comparison">("standard");
+
+  // Translation Quality Control Style: 'literal' | 'fluent' | 'cultural' | 'colloquial' | 'formal'
+  const [selectedStyle, setSelectedStyle] = useState<"literal" | "fluent" | "cultural" | "colloquial" | "formal">("fluent");
+  const [isApplyingStyle, setIsApplyingStyle] = useState<boolean>(false);
+
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [retranslatingId, setRetranslatingId] = useState<string | null>(null);
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const [showLanguageMenu, setShowLanguageMenu] = useState<boolean>(false);
   const [dismissDraftPrompt, setDismissDraftPrompt] = useState<boolean>(false);
+
+  // Bulk Apply Translation Quality Control Style to All / Selected Cues
+  const handleApplyTranslationStyle = async (applyToSelectedOnly: boolean = false) => {
+    const targetCues = applyToSelectedOnly && selectedCueIds.length > 0
+      ? cues.filter((c) => selectedCueIds.includes(c.id))
+      : cues;
+
+    if (targetCues.length === 0 || isApplyingStyle) return;
+
+    setIsApplyingStyle(true);
+    try {
+      const itemsToTranslate = targetCues.map((cue) => ({
+        id: cue.id,
+        originalText: cue.originalText || cue.hebrewText,
+      }));
+
+      const response = await fetch("/api/batch-translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: itemsToTranslate,
+          targetLanguage: selectedLang.name,
+          tone: selectedStyle,
+          glossary,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data) {
+        throw new Error(data?.error || "שגיאה בחידוש תרגום ב-AI לפי סגנון.");
+      }
+
+      const translations: Record<string, string> = data.translations || {};
+      let updatedCount = 0;
+      const updatedCues = cues.map((cue) => {
+        if (translations[cue.id]) {
+          updatedCount++;
+          return {
+            ...cue,
+            hebrewText: translations[cue.id],
+            isEdited: true,
+          };
+        }
+        return cue;
+      });
+
+      onImportSrt(updatedCues);
+
+      const styleLabels: Record<string, string> = {
+        literal: "מילולי ומדויק",
+        fluent: "חופשי וטבעי",
+        cultural: "מותאם לתרבות",
+        colloquial: "יומיומי / סלנג",
+        formal: "רשמי וייצוגי",
+      };
+
+      setFeedbackMessage({
+        type: "success",
+        text: `עודכנו בהצלחה ${updatedCount} כתוביות בסגנון '${styleLabels[selectedStyle]}'!`,
+      });
+    } catch (err: any) {
+      setFeedbackMessage({
+        type: "error",
+        text: err.message || "שגיאה בתהליך התרגום מחדש.",
+      });
+    } finally {
+      setIsApplyingStyle(false);
+    }
+  };
 
   // Selection state for batch operations
   const [selectedCueIds, setSelectedCueIds] = useState<string[]>([]);
@@ -204,8 +285,13 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
   const [syncConflictsModalOpen, setSyncConflictsModalOpen] = useState<boolean>(false);
   const [validationModalOpen, setValidationModalOpen] = useState<boolean>(false);
   const [glossaryModalOpen, setGlossaryModalOpen] = useState<boolean>(false);
+  const [showCleanupWizardModal, setShowCleanupWizardModal] = useState<boolean>(false);
   const [validationResult, setValidationResult] = useState<SrtValidationResult | null>(null);
   const [uploadFileName, setUploadFileName] = useState<string>("");
+
+  // Split View state: Global toggle or per-row toggles
+  const [isGlobalSplitView, setIsGlobalSplitView] = useState<boolean>(false);
+  const [splitViewRowIds, setSplitViewRowIds] = useState<Set<string>>(new Set());
 
   // Feedback toast banner
   const [feedbackMessage, setFeedbackMessage] = useState<{
@@ -516,6 +602,157 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         text: "כל הכתוביות כבר מעוצבות ותקינות לחלוטין ללא שגיאות פיסוק או ריווח.",
       });
     }
+  };
+
+  // Feature 2: Batch Fix Sync - Heuristic analysis to adjust zero/negative durations & enforce 0.2s minimum gap
+  const handleBatchFixSync = () => {
+    if (cues.length === 0) return;
+
+    let zeroOrNegativeCount = 0;
+    let gapAdjustedCount = 0;
+
+    // Sort chronologically by start time
+    const sorted = [...cues].sort((a, b) => a.startTime - b.startTime);
+
+    // Step 1: Fix zero or negative duration cues with heuristic duration estimation
+    const durationFixed = sorted.map((cue) => {
+      let start = Math.max(0, cue.startTime);
+      let end = cue.endTime;
+      const textLen = (cue.hebrewText || cue.originalText || "").trim().length;
+
+      // Heuristic duration based on character count (at least 1.0s, ~0.08s per character up to 5s)
+      const heuristicDuration = Math.max(1.0, Math.min(5.0, textLen * 0.08));
+
+      if (end <= start || end - start < 0.2) {
+        end = start + heuristicDuration;
+        zeroOrNegativeCount++;
+      }
+
+      return {
+        ...cue,
+        startTime: Number(start.toFixed(3)),
+        endTime: Number(end.toFixed(3)),
+        isEdited: true,
+      };
+    });
+
+    // Step 2: Ensure minimum gap of 0.2s between all consecutive subtitles
+    const MIN_GAP = 0.2;
+    const finalCues: SubtitleCue[] = [];
+
+    for (let i = 0; i < durationFixed.length; i++) {
+      const current = { ...durationFixed[i] };
+
+      if (i > 0) {
+        const prev = finalCues[i - 1];
+        const requiredStart = prev.endTime + MIN_GAP;
+
+        if (current.startTime < requiredStart) {
+          gapAdjustedCount++;
+
+          // Attempt to trim previous cue end time if it has ample duration (> 1.2s)
+          if (prev.endTime - prev.startTime > 1.2 && current.startTime - prev.startTime >= 0.8) {
+            prev.endTime = Number((current.startTime - MIN_GAP).toFixed(3));
+          } else {
+            // Push current cue start time forward
+            current.startTime = Number(requiredStart.toFixed(3));
+            if (current.endTime < current.startTime + 0.5) {
+              current.endTime = Number((current.startTime + 0.8).toFixed(3));
+            }
+          }
+        }
+      }
+
+      finalCues.push(current);
+    }
+
+    // Apply updated cues
+    if (onReplaceAllCues) {
+      onReplaceAllCues(finalCues);
+    } else {
+      onImportSrt(finalCues);
+    }
+
+    setFeedbackMessage({
+      type: "success",
+      text: `סנכרון אצווה (Batch Fix Sync) בוצע בהצלחה! תוקנו ${zeroOrNegativeCount} משכים אפסיים/שליליים והוחל מרווח מינימלי של 0.2s בין ${gapAdjustedCount} כתוביות עוקבות.`,
+    });
+    setTimeout(() => setFeedbackMessage(null), 5000);
+  };
+
+  // Feature: Resolve Overlap - automatically truncates earlier cue's end time to fix overlap
+  const handleResolveOverlap = (targetCueId: string) => {
+    const targetCue = cues.find((c) => c.id === targetCueId);
+    if (!targetCue) return;
+
+    const overlapInfo = overlappingCuesMap.get(targetCueId);
+    if (!overlapInfo || overlapInfo.overlappingIds.length === 0) return;
+
+    let updatedCues = [...cues];
+    let resolvedCount = 0;
+
+    overlapInfo.overlappingIds.forEach((otherId) => {
+      const otherCue = updatedCues.find((c) => c.id === otherId);
+      if (!otherCue) return;
+
+      if (otherCue.startTime < targetCue.startTime) {
+        // otherCue is earlier -> truncate otherCue.endTime
+        const newEndTime = Number(Math.max(otherCue.startTime + 0.1, targetCue.startTime - 0.05).toFixed(3));
+        updatedCues = updatedCues.map((c) => (c.id === otherCue.id ? { ...c, endTime: newEndTime, isEdited: true } : c));
+        resolvedCount++;
+      } else if (targetCue.startTime < otherCue.startTime) {
+        // targetCue is earlier -> truncate targetCue.endTime
+        const newEndTime = Number(Math.max(targetCue.startTime + 0.1, otherCue.startTime - 0.05).toFixed(3));
+        updatedCues = updatedCues.map((c) => (c.id === targetCue.id ? { ...c, endTime: newEndTime, isEdited: true } : c));
+        resolvedCount++;
+      } else {
+        // Same start time -> adjust end time of targetCue
+        const newEndTime = Number((targetCue.startTime + 1.2).toFixed(3));
+        const newOtherStart = Number((newEndTime + 0.05).toFixed(3));
+        updatedCues = updatedCues.map((c) => (c.id === otherCue.id ? { ...c, startTime: newOtherStart, isEdited: true } : c));
+        resolvedCount++;
+      }
+    });
+
+    if (onReplaceAllCues) {
+      onReplaceAllCues(updatedCues);
+    } else {
+      onImportSrt(updatedCues);
+    }
+
+    setFeedbackMessage({
+      type: "success",
+      text: `חפיפת זמנים נפתרה בהצלחה! קוצץ זמן הסיום של הכתובית המוקדמת ב-0.05 שניות (${resolvedCount} כתוביות סונכרנו).`,
+    });
+    setTimeout(() => setFeedbackMessage(null), 4500);
+  };
+
+  // Feature: Smart Merge - Identifies consecutive cues with identical speakers or overlapping/continuing sentences and merges them
+  const handleSmartMerge = () => {
+    if (cues.length <= 1) return;
+
+    const result = smartMergeCues(cues);
+
+    if (result.mergedCount === 0) {
+      setFeedbackMessage({
+        type: "info",
+        text: "ניתוח מיזוג חכם (Smart Merge): לא נמצאו כתוביות עוקבות הדורשות מיזוג (הרצף תקין לחלוטין).",
+      });
+      setTimeout(() => setFeedbackMessage(null), 4000);
+      return;
+    }
+
+    if (onReplaceAllCues) {
+      onReplaceAllCues(result.mergedCues);
+    } else {
+      onImportSrt(result.mergedCues);
+    }
+
+    setFeedbackMessage({
+      type: "success",
+      text: `מיזוג חכם (Smart Merge) בוצע בהצלחה! מוזגו ${result.mergedCount} כתוביות עוקבות (${result.speakerMergeCount} לפי דובר זהה, ${result.sentenceMergeCount} לפי רצף משפטים).`,
+    });
+    setTimeout(() => setFeedbackMessage(null), 5000);
   };
 
   // Handle Find and Replace apply
@@ -857,10 +1094,12 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
             </button>
 
             {showToneMenu && (
-              <div
-                className="absolute right-0 sm:left-0 sm:right-auto mt-1.5 w-60 max-w-[calc(100vw-2.5rem)] bg-[#161616] border border-[#2e2e2e] rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2"
-                onMouseLeave={() => setShowToneMenu(false)}
-              >
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowToneMenu(false)} />
+                <div
+                  className="absolute right-0 sm:left-0 sm:right-auto mt-1.5 w-60 max-w-[calc(100vw-2.5rem)] bg-[#161616] border border-[#2e2e2e] rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2"
+                  onMouseLeave={() => setShowToneMenu(false)}
+                >
                 <div className="text-[11px] font-bold text-gray-400 px-2 py-1 border-b border-[#222222] mb-1">
                   סגנון תרגום AI (Tone Preference):
                 </div>
@@ -934,6 +1173,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                   <span className="text-[10px] text-gray-400">תרגום צמוד למילים המקוריות ללא פרפרזה חופשית</span>
                 </button>
               </div>
+              </>
             )}
           </div>
 
@@ -955,10 +1195,12 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
             </button>
 
             {showLanguageMenu && (
-              <div
-                className="absolute right-0 sm:left-0 sm:right-auto mt-1.5 w-56 max-w-[calc(100vw-2.5rem)] bg-[#161616] border border-[#2e2e2e] rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 max-h-72 overflow-y-auto custom-scrollbar"
-                onMouseLeave={() => setShowLanguageMenu(false)}
-              >
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowLanguageMenu(false)} />
+                <div
+                  className="absolute right-0 sm:left-0 sm:right-auto mt-1.5 w-56 max-w-[calc(100vw-2.5rem)] bg-[#161616] border border-[#2e2e2e] rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 max-h-72 overflow-y-auto custom-scrollbar"
+                  onMouseLeave={() => setShowLanguageMenu(false)}
+                >
                 <div className="text-[11px] font-bold text-gray-400 px-2 py-1 border-b border-[#222222] mb-1">
                   בחר שפת יעד לתרגום (Target Language):
                 </div>
@@ -980,6 +1222,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                   </button>
                 ))}
               </div>
+              </>
             )}
           </div>
         </div>
@@ -1086,9 +1329,36 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
             </button>
           </div>
 
-          {/* Secondary Utilities: Find & Replace, Batch Time Shift, OCR Cleaner, Merge Short Cues, Auto-Format */}
+          {/* Secondary Utilities: Find & Replace, Batch Time Shift, Subtitle Clean-up Wizard, Split View, OCR Cleaner, Merge Short Cues, Auto-Format */}
           <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-[#1f1f1f]">
             <div className="flex items-center gap-1.5 flex-wrap flex-1">
+              {/* Subtitle Clean-up Wizard Button */}
+              <button
+                id="subtitle-cleanup-wizard-btn"
+                onClick={() => setShowCleanupWizardModal(true)}
+                disabled={cues.length === 0}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-purple-950 via-indigo-950 to-purple-900 hover:from-purple-900 hover:to-indigo-900 text-purple-200 hover:text-white border border-purple-500/50 hover:border-purple-400 rounded-md text-xs font-bold transition disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
+                title="אשף ניקוי ותיקון שגיאות כתוביות (Clean-up Wizard): ניתוח כתוביות ריקות, משכי זמן חריגים וחריגות תצוגה"
+              >
+                <Wrench className="w-3.5 h-3.5 text-purple-400" />
+                <span>אשף ניקוי שגיאות</span>
+              </button>
+
+              {/* Global Split View Toggle Button */}
+              <button
+                id="global-split-view-btn"
+                onClick={() => setIsGlobalSplitView(!isGlobalSplitView)}
+                className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-bold transition cursor-pointer border shadow-sm ${
+                  isGlobalSplitView
+                    ? "bg-cyan-950 text-cyan-200 border-cyan-500/80 shadow-cyan-950/40"
+                    : "bg-[#1c1c1c] text-gray-300 hover:text-white border-[#333333] hover:border-cyan-500/40"
+                }`}
+                title="תצוגת פיצול גלובלית (Split View): הצג טקסט מקור ותרגום זה לצד זה בכל הכתוביות"
+              >
+                <Columns className={`w-3.5 h-3.5 ${isGlobalSplitView ? "text-cyan-300" : "text-cyan-400"}`} />
+                <span>{isGlobalSplitView ? "פיצול (פעיל)" : "תצוגת פיצול (Split View)"}</span>
+              </button>
+
               {/* Find & Replace Button */}
               <button
                 id="find-and-replace-btn"
@@ -1130,6 +1400,18 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                 <span>עיצוב אוטומטי</span>
               </button>
 
+              {/* Feature 2: Batch Fix Sync Button */}
+              <button
+                id="batch-fix-sync-btn"
+                onClick={handleBatchFixSync}
+                disabled={cues.length === 0}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-cyan-950 via-blue-950 to-indigo-950 hover:from-cyan-900 hover:to-indigo-900 text-cyan-200 hover:text-white border border-cyan-500/50 hover:border-cyan-400 rounded-md text-xs font-bold transition disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
+                title="סנכרון אצווה (Batch Fix Sync): ניתוח היוריסטי לתיקון משכים אפסיים/שליליים והבטחת מרווח מינימלי של 0.2 שניות בין כל הכתוביות"
+              >
+                <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                <span>סנכרון אצווה (Batch Fix Sync)</span>
+              </button>
+
               {/* Resolve All Sync Conflicts Tool */}
               <button
                 id="resolve-sync-conflicts-btn"
@@ -1162,6 +1444,18 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                     {highCpsCount} מהירות
                   </span>
                 )}
+              </button>
+
+              {/* Feature: Smart Merge Cues Button */}
+              <button
+                id="smart-merge-cues-btn"
+                onClick={handleSmartMerge}
+                disabled={cues.length <= 1}
+                className="flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-purple-950 via-violet-950 to-indigo-950 hover:from-purple-900 hover:to-indigo-900 text-purple-200 hover:text-white border border-purple-500/50 hover:border-purple-400 rounded-md text-xs font-bold transition disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-sm"
+                title="מיזוג חכם (Smart Merge): זיהוי אוטומטי של כתוביות עוקבות עם דוברים זהים או משפטים רציפים ואיחודן לכתובית רציפה אחת"
+              >
+                <Combine className="w-3.5 h-3.5 text-purple-400" />
+                <span>מיזוג חכם (Smart Merge)</span>
               </button>
 
               {/* Speaker Diarization Button */}
@@ -1217,6 +1511,139 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                 <Combine className="w-3 h-3 text-blue-400" />
                 <span className="hidden sm:inline">איחוד קצרות</span>
               </button>
+            </div>
+          </div>
+
+          {/* Translation Quality Control & Comparison Mode Toggle Panel */}
+          <div className="bg-[#101522] border border-blue-900/40 rounded-xl p-3 flex flex-col gap-2.5 my-1 shadow-lg" id="translation-quality-control-panel">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              {/* Left: Title & Info */}
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-blue-600/20 border border-blue-500/30 text-blue-400 shrink-0">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span>בקרת איכות תרגום וסגנון AI</span>
+                    <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.2 rounded-full font-mono">
+                      Gemini 2.5
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-gray-400">
+                    בחר סגנון תרגום להתאמת המשלב הלשוני והמקצב
+                  </p>
+                </div>
+              </div>
+
+              {/* Right: View Mode Toggle (Standard vs Comparison) */}
+              <div className="flex items-center bg-[#0a0d14] p-1 rounded-lg border border-[#222d42] shrink-0">
+                <button
+                  type="button"
+                  id="view-mode-standard-btn"
+                  onClick={() => setViewMode("standard")}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-md transition cursor-pointer flex items-center gap-1 ${
+                    viewMode === "standard"
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "text-gray-400 hover:text-gray-200"
+                  }`}
+                  title="תצוגת עריכה רגילה"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>רגיל</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="view-mode-comparison-btn"
+                  onClick={() => setViewMode("comparison")}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-md transition cursor-pointer flex items-center gap-1 ${
+                    viewMode === "comparison"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-gray-400 hover:text-gray-200"
+                  }`}
+                  title="מצב השוואה: הצגת הכתובית המקורית והכתובית המתורגמת זו לצד זו"
+                >
+                  <Replace className="w-3.5 h-3.5 text-purple-200" />
+                  <span>מצב השוואה (מקור ↔️ תרגום)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Translation Style Selector Pills */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 pt-1 border-t border-[#1a2336]">
+              {[
+                { id: "literal", name: "מילולי ומדויק", desc: "תרגום מילה במילה", icon: "📐" },
+                { id: "fluent", name: "חופשי וטבעי", desc: "זרימה קולנועית", icon: "✨" },
+                { id: "cultural", name: "מותאם לתרבות", desc: "אידיומטיקה והקשר", icon: "🌍" },
+                { id: "colloquial", name: "יומיומי / סלנג", desc: "שפה קלילה ומדוברת", icon: "💬" },
+                { id: "formal", name: "רשמי וייצוגי", desc: "משלב לשוני גבוה", icon: "🎓" },
+              ].map((styleOpt) => {
+                const isSelected = selectedStyle === styleOpt.id;
+                return (
+                  <button
+                    key={styleOpt.id}
+                    type="button"
+                    onClick={() => setSelectedStyle(styleOpt.id as any)}
+                    className={`flex flex-col text-right p-2 rounded-lg border transition cursor-pointer ${
+                      isSelected
+                        ? "bg-purple-950/80 border-purple-500 text-white shadow-sm shadow-purple-950/50"
+                        : "bg-[#0f1420] border-[#1e283d] text-gray-300 hover:bg-[#161f33] hover:text-white"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[11px] font-bold flex items-center gap-1">
+                        <span>{styleOpt.icon}</span>
+                        <span>{styleOpt.name}</span>
+                      </span>
+                      {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
+                    </div>
+                    <span className="text-[9.5px] text-gray-400 truncate">{styleOpt.desc}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Action Buttons to Apply Selected Style */}
+            <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-[#1a2336]">
+              <span className="text-[11px] text-purple-300 font-medium">
+                סגנון נבחר: <strong>{selectedStyle === "literal" ? "מילולי ומדויק" : selectedStyle === "cultural" ? "מותאם לתרבות" : selectedStyle === "colloquial" ? "יומיומי" : selectedStyle === "formal" ? "רשמי" : "חופשי וטבעי"}</strong>
+              </span>
+
+              <div className="flex items-center gap-2">
+                {selectedCueIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleApplyTranslationStyle(true)}
+                    disabled={isApplyingStyle}
+                    className="px-2.5 py-1 bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-500/40 rounded-md text-xs font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    title={`תרגם מחדש את ${selectedCueIds.length} הכתוביות שנבחרו בסגנון זה`}
+                  >
+                    {isApplyingStyle ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5 text-purple-300" />}
+                    <span>תרגם {selectedCueIds.length} מסומנות</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  id="apply-translation-style-btn"
+                  onClick={() => handleApplyTranslationStyle(false)}
+                  disabled={cues.length === 0 || isApplyingStyle}
+                  className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-md text-xs font-bold transition shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                  title="תרגם מחדש את כל הכתוביות ב-AI בסגנון שנבחר"
+                >
+                  {isApplyingStyle ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>שולח מחדש ל-AI בסגנון {selectedStyle}...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                      <span>החל סגנון ותרגם מחדש את כל הכתוביות ב-AI</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1512,6 +1939,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
               : null;
 
             const speakerColor = cue.speakerColor || (cue.speaker ? getSpeakerColor(cue.speaker) : undefined);
+            const isRowSplitView = isGlobalSplitView || splitViewRowIds.has(cue.id) || viewMode === "comparison";
 
             return (
               <div
@@ -1520,7 +1948,7 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                 style={speakerColor ? { borderRight: `4px solid ${speakerColor}` } : undefined}
                 className={`group rounded-lg border p-3 transition-all duration-200 relative ${
                   isOverlapping
-                    ? "bg-[#181113] border-rose-600 shadow-md shadow-rose-950/50 ring-2 ring-rose-500/70"
+                    ? "bg-[#1f170f] border-amber-500 shadow-lg shadow-amber-950/60 ring-2 ring-amber-500/80"
                     : isActive
                     ? "bg-[#181818] border-blue-500 shadow-md shadow-blue-950/40 ring-1 ring-blue-500/50"
                     : isSelected
@@ -1530,17 +1958,24 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
               >
                 {/* Real-time Overlap Warning Banner */}
                 {isOverlapping && (
-                  <div className="mb-2 px-2.5 py-1 bg-rose-950/90 border border-rose-500/80 rounded-md text-[11px] text-rose-200 flex items-center justify-between gap-2 animate-in fade-in">
+                  <div className="mb-2 px-2.5 py-1.5 bg-[#2b1807] border border-amber-500/90 rounded-md text-[11px] text-amber-200 flex items-center justify-between gap-2 animate-in fade-in shadow-xs">
                     <div className="flex items-center gap-1.5 font-bold">
-                      <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 animate-pulse" />
                       <span>
                         אזהרת סנכרון: חפיפת זמנים עם כתובית{" "}
                         {overlapInfo.overlappingIndexes.map((num) => `#${num}`).join(", ")}
                       </span>
                     </div>
-                    <span className="text-[10px] text-rose-300 font-mono">
-                      (בדוק זמני התחלה/סיום)
-                    </span>
+                    <button
+                      type="button"
+                      id={`resolve-overlap-btn-${cue.id}`}
+                      onClick={() => handleResolveOverlap(cue.id)}
+                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-[11px] rounded transition shadow flex items-center gap-1 cursor-pointer shrink-0"
+                      title="קצץ אוטומטית את זמן הסיום של הכתובית המוקדמת לביטול החפיפה (Resolve Overlap)"
+                    >
+                      <Wrench className="w-3 h-3 text-black" />
+                      <span>פתור חפיפה (Resolve Overlap)</span>
+                    </button>
                   </div>
                 )}
 
@@ -1721,6 +2156,20 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
 
                   {/* Actions for this cue */}
                   <div className="flex items-center gap-1">
+                    {/* Feature 1: Resolve Overlap Context Action */}
+                    {isOverlapping && (
+                      <button
+                        type="button"
+                        id={`context-resolve-overlap-btn-${cue.id}`}
+                        onClick={() => handleResolveOverlap(cue.id)}
+                        className="px-2 py-1 rounded bg-amber-600 hover:bg-amber-500 text-black font-extrabold border border-amber-400 transition cursor-pointer flex items-center gap-1 text-[11px] shadow-xs"
+                        title="פעולת קונטקסט: פתור חפיפת זמנים באופן אוטומטי (Resolve Overlap)"
+                      >
+                        <Wrench className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">פתור חפיפה</span>
+                      </button>
+                    )}
+
                     {/* Merge with next cue */}
                     {hasNextChronologicalCue && (
                       <button
@@ -1737,6 +2186,31 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                         <span className="hidden sm:inline">אחד עם הבאה</span>
                       </button>
                     )}
+
+                    {/* Per-row Split View Toggle Button */}
+                    <button
+                      type="button"
+                      id={`split-view-row-btn-${cue.id}`}
+                      onClick={() => {
+                        setSplitViewRowIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(cue.id)) next.delete(cue.id);
+                          else next.add(cue.id);
+                          return next;
+                        });
+                      }}
+                      className={`px-2 py-1 rounded border transition cursor-pointer flex items-center gap-1 text-[11px] font-bold shadow-xs ${
+                        splitViewRowIds.has(cue.id) || isGlobalSplitView
+                          ? "bg-cyan-950 text-cyan-200 border-cyan-500/80"
+                          : "bg-[#1c1c1c] text-gray-400 hover:text-cyan-300 border-[#2d2d2d] hover:border-cyan-500/40"
+                      }`}
+                      title="תצוגת פיצול בשורה זו (Split View): הצג טקסט מקור ותרגום עברית זה לצד זה לבדיקת דיוק"
+                    >
+                      <Columns className={`w-3.5 h-3.5 ${splitViewRowIds.has(cue.id) || isGlobalSplitView ? "text-cyan-300" : "text-gray-400"}`} />
+                      <span className="hidden sm:inline">
+                        {splitViewRowIds.has(cue.id) || isGlobalSplitView ? "פיצול (פעיל)" : "פיצול תצוגה"}
+                      </span>
+                    </button>
 
                     {/* Play from this timestamp */}
                     <button
@@ -1768,56 +2242,154 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
                   </div>
                 </div>
 
-                {/* Subtitle Content: Original vs Translated */}
-                <div className="space-y-1.5">
-                  {/* Translated Text (Target Language) with Real-time Spellcheck */}
-                  <div className="relative">
-                    <label className="text-[10px] font-semibold text-blue-400 flex items-center justify-between mb-0.5">
-                      <span className="flex items-center gap-1">
-                        <span>תרגום ל-{selectedLang.nativeName}:</span>
-                        <span className="text-xs">{selectedLang.flag}</span>
-                      </span>
-                      <span className="text-[9px] text-gray-500 font-mono">{selectedLang.name}</span>
-                    </label>
+                {/* Subtitle Content: Original vs Translated (Standard or Comparison / Split View Mode) */}
+                {isRowSplitView ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                    {/* Column 1: Original text detected from video */}
+                    <div className="bg-[#0b0f17] border border-amber-900/30 rounded-lg p-2.5 flex flex-col gap-1.5 shadow-inner">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-1 font-bold text-amber-300">
+                          <Film className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>טקסט מקורי (זיהוי מהסרטון):</span>
+                        </div>
+                        <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded text-[10px] font-mono">
+                          {cue.detectedLanguage || "זיהוי אוטומטי"}
+                        </span>
+                      </div>
 
-                    <SpellcheckSubtitleInput
-                      cueId={cue.id}
-                      value={cue.hebrewText}
-                      onChange={(newVal) =>
-                        onUpdateCue({
-                          ...cue,
-                          hebrewText: newVal,
-                          isEdited: true,
-                        })
-                      }
-                      targetLanguage={selectedLang}
-                      dir={selectedLang.dir}
-                      placeholder={`הזן טקסט כתובית ב-${selectedLang.nativeName}...`}
-                    />
-                  </div>
+                      <textarea
+                        dir="ltr"
+                        value={cue.originalText}
+                        onChange={(e) =>
+                          onUpdateCue({
+                            ...cue,
+                            originalText: e.target.value,
+                            isEdited: true,
+                          })
+                        }
+                        placeholder="טקסט מקורי שזוהה ב-OCR..."
+                        className="w-full bg-[#121622] text-amber-100 border border-[#232f48] rounded-md p-2 text-xs font-mono min-h-[58px] focus:outline-none focus:border-amber-500/60 leading-relaxed"
+                      />
 
-                  {/* Original Detected Hardcoded Text */}
-                  <div>
-                    <label className="text-[10px] font-semibold text-gray-500 flex items-center justify-between mb-0.5">
-                      <span>טקסט מקורי שזוהה בסרטון:</span>
-                      <span className="text-[9px] text-gray-600 font-mono">{cue.detectedLanguage || "מקור"}</span>
-                    </label>
-                    <input
-                      type="text"
-                      dir="ltr"
-                      value={cue.originalText}
-                      onChange={(e) =>
-                        onUpdateCue({
-                          ...cue,
-                          originalText: e.target.value,
-                          isEdited: true,
-                        })
-                      }
-                      className="w-full bg-[#0d0d0d] border border-[#222222] rounded-md px-2 py-1 text-[11px] text-gray-400 font-mono focus:outline-none focus:border-gray-600"
-                      placeholder="Original detected text..."
-                    />
+                      <div className="flex items-center justify-between text-[10px] text-gray-400 pt-0.5">
+                        <span>
+                          {cue.originalText.trim() ? cue.originalText.trim().split(/\s+/).length : 0} מילים במקור
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(cue.originalText);
+                            setFeedbackMessage({ type: "info", text: "טקסט המקור הועתק ללוח" });
+                          }}
+                          className="text-amber-400 hover:text-amber-300 font-medium cursor-pointer"
+                        >
+                          העתק מקור
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Column 2: New translated text */}
+                    <div className="bg-[#0c121e] border border-blue-900/40 rounded-lg p-2.5 flex flex-col gap-1.5 shadow-inner">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-1 font-bold text-blue-300">
+                          <Languages className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                          <span>תרגום חדש ({selectedLang.nativeName}):</span>
+                          <span className="text-xs">{selectedLang.flag}</span>
+                        </div>
+                        {cue.originalText && cue.hebrewText && (
+                          <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.2 rounded text-[10px] font-mono">
+                            יחס אורך: {Math.round((cue.hebrewText.length / Math.max(1, cue.originalText.length)) * 100)}%
+                          </span>
+                        )}
+                      </div>
+
+                      <SpellcheckSubtitleInput
+                        cueId={cue.id}
+                        value={cue.hebrewText}
+                        onChange={(newVal) =>
+                          onUpdateCue({
+                            ...cue,
+                            hebrewText: newVal,
+                            isEdited: true,
+                          })
+                        }
+                        targetLanguage={selectedLang}
+                        dir={selectedLang.dir}
+                        placeholder={`הזן תרגום מתוקן ב-${selectedLang.nativeName}...`}
+                      />
+
+                      <div className="flex items-center justify-between text-[10px] text-gray-400 pt-0.5">
+                        <span className="flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          <span>סגנון: {selectedStyle}</span>
+                        </span>
+                        <button
+                          type="button"
+                          disabled={retranslatingId === cue.id}
+                          onClick={() => handleRetranslate(cue)}
+                          className="text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          {retranslatingId === cue.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <RotateCcw className="w-3 h-3" />
+                          )}
+                          <span>תרגם שורה זו שוב</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {/* Translated Text (Target Language) with Real-time Spellcheck */}
+                    <div className="relative">
+                      <label className="text-[10px] font-semibold text-blue-400 flex items-center justify-between mb-0.5">
+                        <span className="flex items-center gap-1">
+                          <span>תרגום ל-{selectedLang.nativeName}:</span>
+                          <span className="text-xs">{selectedLang.flag}</span>
+                        </span>
+                        <span className="text-[9px] text-gray-500 font-mono">{selectedLang.name}</span>
+                      </label>
+
+                      <SpellcheckSubtitleInput
+                        cueId={cue.id}
+                        value={cue.hebrewText}
+                        onChange={(newVal) =>
+                          onUpdateCue({
+                            ...cue,
+                            hebrewText: newVal,
+                            isEdited: true,
+                          })
+                        }
+                        targetLanguage={selectedLang}
+                        dir={selectedLang.dir}
+                        placeholder={`הזן טקסט כתובית ב-${selectedLang.nativeName}...`}
+                      />
+                    </div>
+
+                    {/* Original Detected Hardcoded Text */}
+                    <div>
+                      <label className="text-[10px] font-semibold text-gray-500 flex items-center justify-between mb-0.5">
+                        <span>טקסט מקורי שזוהה בסרטון:</span>
+                        <span className="text-[9px] text-gray-600 font-mono">{cue.detectedLanguage || "מקור"}</span>
+                      </label>
+                      <input
+                        type="text"
+                        dir="ltr"
+                        value={cue.originalText}
+                        onChange={(e) =>
+                          onUpdateCue({
+                            ...cue,
+                            originalText: e.target.value,
+                            isEdited: true,
+                          })
+                        }
+                        className="w-full bg-[#0d0d0d] border border-[#222222] rounded-md px-2 py-1 text-[11px] text-gray-400 font-mono focus:outline-none focus:border-gray-600"
+                        placeholder="Original detected text..."
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })
@@ -1883,6 +2455,25 @@ export const SubtitleEditor: React.FC<SubtitleEditorProps> = ({
         validationResult={validationResult}
         fileName={uploadFileName}
         onConfirmImport={handleConfirmImport}
+      />
+
+      {/* Subtitle Clean-up Wizard Modal */}
+      <SubtitleCleanupWizardModal
+        isOpen={showCleanupWizardModal}
+        onClose={() => setShowCleanupWizardModal(false)}
+        cues={cues}
+        videoDuration={effectiveDuration}
+        onApplyFixedCues={(fixedCues, summaryText) => {
+          if (onReplaceAllCues) {
+            onReplaceAllCues(fixedCues);
+          } else {
+            onImportSrt(fixedCues);
+          }
+          setFeedbackMessage({
+            type: "success",
+            text: summaryText,
+          });
+        }}
       />
 
       {/* Glossary Dictionary JSON Modal */}

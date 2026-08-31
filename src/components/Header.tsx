@@ -129,10 +129,12 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {showDemos && (
-              <div 
-                className="absolute right-0 md:right-0 mt-2 w-72 bg-[#141414] border border-[#2e2e2e] rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2"
-                onMouseLeave={() => setShowDemos(false)}
-              >
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowDemos(false)} />
+                <div 
+                  className="absolute right-0 md:right-0 mt-2 w-72 bg-[#141414] border border-[#2e2e2e] rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2"
+                  onMouseLeave={() => setShowDemos(false)}
+                >
                 <div className="text-xs font-semibold text-gray-400 px-2 py-1.5 border-b border-[#222222]">
                   בחר סרטון דוגמה עם כתוביות מובנות:
                 </div>
@@ -155,6 +157,7 @@ export const Header: React.FC<HeaderProps> = ({
                   ))}
                 </div>
               </div>
+              </>
             )}
           </div>
 

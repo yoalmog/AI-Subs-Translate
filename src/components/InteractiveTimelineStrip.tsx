@@ -13,9 +13,12 @@ import {
   ChevronRight,
   Sparkles,
   GripVertical,
+  Activity,
+  Flame,
 } from "lucide-react";
 import { SubtitleCue } from "../types";
 import { formatTimeDisplay } from "../utils/timeFormat";
+import { calculateSubtitleDensityHeatmap, SubtitleDensityBucket } from "../utils/subtitleTools";
 
 interface InteractiveTimelineStripProps {
   cues: SubtitleCue[];
@@ -56,12 +59,19 @@ export const InteractiveTimelineStrip: React.FC<InteractiveTimelineStripProps> =
   // Zoom Level: 1x (Fit), 2x, 3x, 4x, 6x
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [snapToGrid, setSnapToGrid] = useState<boolean>(true); // snap to 0.05s (50ms)
+  const [showDensityHeatmap, setShowDensityHeatmap] = useState<boolean>(false);
   const [dragState, setDragState] = useState<DragState | null>(null);
 
   const effectiveDuration = Math.max(
     videoDuration || 10,
     cues.length > 0 ? Math.max(...cues.map((c) => c.endTime)) + 1 : 10
   );
+
+  // Subtitle Density Heatmap buckets calculation
+  const densityBuckets: SubtitleDensityBucket[] = useMemo(() => {
+    if (!showDensityHeatmap) return [];
+    return calculateSubtitleDensityHeatmap(cues, effectiveDuration, 75);
+  }, [cues, effectiveDuration, showDensityHeatmap]);
 
   // Helper: Convert X position in track to seconds
   const getSecondsFromPointerX = useCallback(
@@ -248,8 +258,24 @@ export const InteractiveTimelineStrip: React.FC<InteractiveTimelineStripProps> =
           </div>
         </div>
 
-        {/* Zoom & Snap Controls */}
-        <div className="flex items-center gap-1.5">
+        {/* Zoom & Snap & Density Heatmap Controls */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Subtitle Density Heatmap Toggle */}
+          <button
+            type="button"
+            id="subtitle-density-heatmap-btn"
+            onClick={() => setShowDensityHeatmap(!showDensityHeatmap)}
+            className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition cursor-pointer flex items-center gap-1 ${
+              showDensityHeatmap
+                ? "bg-amber-950 text-amber-300 border-amber-500/80 shadow-md shadow-amber-950/40"
+                : "bg-[#1c1c1c] text-gray-400 border-[#303030] hover:text-white"
+            }`}
+            title="מפת עומס כתוביות (Subtitle Density Heatmap): הצג עומס טקסט בצבעים לאורך ציר הזמן"
+          >
+            <Flame className={`w-3.5 h-3.5 ${showDensityHeatmap ? "text-amber-400 animate-pulse" : "text-gray-400"}`} />
+            <span>{showDensityHeatmap ? "מפת עומס (פעיל)" : "מפת עומס כתוביות"}</span>
+          </button>
+
           {/* Snap toggle */}
           <button
             type="button"
@@ -350,6 +376,35 @@ export const InteractiveTimelineStrip: React.FC<InteractiveTimelineStripProps> =
               );
             })}
           </div>
+
+          {/* Subtitle Density Heatmap Visual Overlay Bar */}
+          {showDensityHeatmap && densityBuckets.length > 0 && (
+            <div className="absolute inset-x-0 top-0 h-2 flex pointer-events-auto z-10 rounded-t overflow-hidden border-b border-white/10 opacity-90">
+              {densityBuckets.map((b) => {
+                const bWidthPct = 100 / densityBuckets.length;
+
+                let colorClass = "bg-emerald-500/25";
+                if (b.densityScore > 0.65) {
+                  colorClass = "bg-rose-500/90 shadow-[0_0_8px_rgba(244,63,94,0.8)] animate-pulse";
+                } else if (b.densityScore > 0.45) {
+                  colorClass = "bg-amber-500/70";
+                } else if (b.densityScore > 0.2) {
+                  colorClass = "bg-yellow-400/50";
+                }
+
+                return (
+                  <div
+                    key={b.index}
+                    style={{ width: `${bWidthPct}%` }}
+                    className={`h-full transition-colors ${colorClass}`}
+                    title={`מפת עומס [${formatTimeDisplay(b.startTime)} - ${formatTimeDisplay(b.endTime)}]: ${b.totalChars} תווים ב-${b.cueCount} כתוביות (${
+                      b.isCluttered ? "אזור עמוס / דחוס!" : "עומס תקין"
+                    })`}
+                  />
+                );
+              })}
+            </div>
+          )}
 
           {/* Subtitle Cue Horizontal Blocks */}
           {cues.map((cue, idx) => {
@@ -496,6 +551,12 @@ export const InteractiveTimelineStrip: React.FC<InteractiveTimelineStripProps> =
       {/* Timeline Legend */}
       <div className="flex items-center justify-between flex-wrap gap-2 text-[10px] text-gray-400 pt-1 border-t border-[#1f1f1f]">
         <div className="flex items-center gap-3 flex-wrap">
+          {showDensityHeatmap && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-950/80 border border-amber-500/50 rounded text-amber-300 font-bold">
+              <Flame className="w-3 h-3 text-amber-400" />
+              <span>מפת עומס: ירוק (תקין) → אדום (אזור עמוס/דחוס)</span>
+            </span>
+          )}
           <span className="flex items-center gap-1 text-rose-400 font-bold">
             <span className="w-2 h-2 rounded bg-rose-600 ring-1 ring-rose-300 inline-block animate-pulse"></span>
             שגיאת OCR (&lt;1.0s)
